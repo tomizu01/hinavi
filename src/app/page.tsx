@@ -135,20 +135,18 @@ export default function MainPage() {
 
   return (
     <main className="h-dvh flex flex-col bg-neutral-950 text-neutral-100">
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 relative">
         <MapView position={position} online={online} />
+        <button
+          onClick={handlePauseToggle}
+          className={`absolute top-2 left-2 z-10 px-4 py-2 rounded-full text-sm font-medium shadow-lg backdrop-blur-sm ${paused ? 'bg-emerald-600/90 hover:bg-emerald-500' : 'bg-neutral-800/80 hover:bg-neutral-700'} text-white`}
+        >
+          {paused ? '再開' : '一時停止'}
+        </button>
       </div>
       <div className="shrink-0 flex flex-col gap-2 py-2">
         <SpeechRow speaker="misaki" text={speech.misaki} side="right" />
         <SpeechRow speaker="hiyori" text={speech.hiyori} side="left" />
-        <div className="px-2 flex justify-center pt-1">
-          <button
-            onClick={handlePauseToggle}
-            className={`px-5 py-2 rounded-full text-sm font-medium ${paused ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-neutral-700 hover:bg-neutral-600'}`}
-          >
-            {paused ? '再開' : '一時停止'}
-          </button>
-        </div>
       </div>
     </main>
   );

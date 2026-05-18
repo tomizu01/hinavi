@@ -6,6 +6,15 @@ export const metadata: Metadata = {
   title: 'hinavi',
   description: '自転車用 観光・飲食ガイド',
   manifest: '/manifest.webmanifest',
+  icons: {
+    icon: '/icon-512.png',
+    apple: '/icon-512.png',
+  },
+  appleWebApp: {
+    capable: true,
+    title: 'hinavi',
+    statusBarStyle: 'black-translucent',
+  },
 };
 
 export const viewport: Viewport = {

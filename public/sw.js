@@ -2,8 +2,9 @@
 // - precache shell assets and offline fallback audio
 // - cache-first for character images
 
-const CACHE_NAME = 'hinavi-v1';
+const CACHE_NAME = 'hinavi-v2';
 const PRECACHE_URLS = [
+  '/icon-512.png',
   '/characters/misaki.png',
   '/characters/hiyori.png',
   '/audio/offline_notice.wav',
