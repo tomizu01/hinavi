@@ -5,8 +5,12 @@ CREATE TABLE IF NOT EXISTS users (
   id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   username     VARCHAR(64) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  display_name VARCHAR(64) DEFAULT NULL,
   created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 既存環境向け（display_name 後付け用。未適用なら手動実行）:
+-- ALTER TABLE users ADD COLUMN display_name VARCHAR(64) DEFAULT NULL AFTER password_hash;
 
 CREATE TABLE IF NOT EXISTS conversations (
   id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

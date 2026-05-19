@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
+import type { RowDataPacket } from 'mysql2';
 import { getSession } from '@/lib/session';
 import { CHARACTERS } from '@/lib/characters';
 import { loadCharacterPrompt } from '@/lib/prompts';
 import { pool } from '@/lib/db';
 import type { GenerateRequest } from '@/lib/types';
+
+const DEFAULT_USER_NAME = 'あなた';
 
 export const runtime = 'nodejs';
 
@@ -13,7 +16,7 @@ interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 }
 
-function buildPrompt(req: GenerateRequest, characterPrompt: string): string {
+function buildPrompt(req: GenerateRequest, characterPrompt: string, userName: string): string {
   const recentHistory = req.history.slice(-10).map((h) => {
     const name = CHARACTERS[h.speaker].displayName;
     return `${name}: ${h.text}`;
@@ -21,11 +24,12 @@ function buildPrompt(req: GenerateRequest, characterPrompt: string): string {
 
   const speakerName = CHARACTERS[req.speaker].displayName;
   const role = req.speaker === 'misaki' ? '案内役' : '盛り上げ役';
+  const filledCharacterPrompt = characterPrompt.replaceAll('{user_name}', userName);
 
   return `あなたは「${speakerName}」（${role}）として、自転車で走るライダーへの音声案内の会話に参加します。
 
 ## キャラクター設定
-${characterPrompt}
+${filledCharacterPrompt}
 
 ## 現在話題にしているスポット
 - 名称: ${req.spot.name}
@@ -53,7 +57,20 @@ export async function POST(req: Request) {
   }
 
   const characterPrompt = await loadCharacterPrompt(body.speaker);
-  const prompt = buildPrompt(body, characterPrompt);
+
+  let userName = DEFAULT_USER_NAME;
+  try {
+    const [rows] = await pool.execute<RowDataPacket[]>(
+      'SELECT display_name FROM users WHERE id = ?',
+      [session.userId],
+    );
+    const dn = rows[0]?.display_name;
+    if (typeof dn === 'string' && dn.trim().length > 0) userName = dn.trim();
+  } catch (err) {
+    console.error('display_name fetch failed:', err);
+  }
+
+  const prompt = buildPrompt(body, characterPrompt, userName);
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
   const res = await fetch(endpoint, {
