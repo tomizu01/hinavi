@@ -12,13 +12,16 @@ export function stopSpeech(): void {
   }
 }
 
-export async function fetchSpeechAudio(text: string, speakerId: number): Promise<string | null> {
+import type { CharacterId } from '@/lib/characters';
+import { getTtsEngine } from './settings';
+
+export async function fetchSpeechAudio(text: string, character: CharacterId): Promise<string | null> {
   if (!text.trim()) return null;
   try {
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, speaker: speakerId }),
+      body: JSON.stringify({ text, character, engine: getTtsEngine() }),
     });
     if (!res.ok) {
       console.error('[TTS] api error:', res.status);

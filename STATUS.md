@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-05-19
+最終更新: 2026-05-19（TTS切替/Settings追加）
 
 ## 1. 概要
 
@@ -27,9 +27,9 @@
 ├── sql/schema.sql             users, conversations テーブル
 ├── scripts/create-user.mjs    bcrypt ユーザー作成スクリプト
 ├── prompts/characters/
-│   ├── misaki1.md             案内役 みさき・奇数ターン用 (VOICEVOX speaker 2)
+│   ├── misaki1.md             案内役 みさき・奇数ターン用 (VOICEVOX speaker 2 / ElevenLabs ugYcuAusTuWCSOpJD0Xd)
 │   ├── misaki2.md             案内役 みさき・偶数ターン用
-│   ├── hiyori1.md             盛り上げ役 ひより・奇数ターン用 (VOICEVOX speaker 8)
+│   ├── hiyori1.md             盛り上げ役 ひより・奇数ターン用 (VOICEVOX speaker 8 / ElevenLabs OSwaPSNdfituxkWcjlkR)
 │   └── hiyori2.md             盛り上げ役 ひより・偶数ターン用
 ├── public/
 │   ├── manifest.webmanifest
@@ -49,20 +49,22 @@
     │       ├── auth/logout/route.ts
     │       ├── places/nearby/route.ts   Google Places API (New)
     │       ├── generate/route.ts        Gemini 3 Flash Preview
-    │       └── tts/route.ts             VOICEVOX (Sakura AI Engine)
+    │       └── tts/route.ts             VOICEVOX(Sakura) / ElevenLabs を engine で分岐
     ├── components/
-    │   ├── MapView.tsx        Google Maps JavaScript API + 現在地追従
-    │   ├── SpeechRow.tsx      キャラ画像 + セリフバブル
-    │   └── SwRegister.tsx     Service Worker 登録
+    │   ├── MapView.tsx          Google Maps JavaScript API + 現在地追従
+    │   ├── SpeechRow.tsx        キャラ画像 + セリフバブル
+    │   ├── SettingsOverlay.tsx  地図右上の歯車ボタン+設定ポップアップ(TTS切替/ログアウト)
+    │   └── SwRegister.tsx       Service Worker 登録
     └── lib/
         ├── db.ts              mysql2 connection pool
         ├── session.ts         iron-session 設定
-        ├── characters.ts      みさき/ひより の定義
+        ├── characters.ts      みさき/ひより の定義 (voicevoxSpeakerId, elevenLabsVoiceId)
         ├── prompts.ts         md ファイルを起動時にメモリキャッシュ
         ├── types.ts
         └── client/
             ├── conversationLoop.ts   1〜14ステップの会話ループ
             ├── geo.ts                haversine
+            ├── settings.ts           TTSエンジン選択を localStorage に永続化
             ├── tts.ts                クライアント側 TTS 再生
             └── wakeLock.ts           Screen Wake Lock
 ```
@@ -74,6 +76,7 @@
 | Google Maps Platform (Maps JS / Places API New) | `.env.local` `GOOGLE_PLACES_API_KEY` / `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | `/var/www/aicyc/.env.local` |
 | Gemini API (`gemini-3-flash-preview`) | `.env.local` `GEMINI_API_KEY` | `/var/www/aicyc/.env.local` |
 | VOICEVOX (Sakura AI Engine `https://api.ai.sakura.ad.jp/tts/v1`) | `.env.local` `SAKURA_AI_TOKEN` | `/var/www/aicyc/.env.local` |
+| ElevenLabs TTS (`eleven_v3`, `mp3_44100_64`, Proプラン契約済) | `.env.local` `ELEVENLABS_API_KEY` | `/var/www/aicyc/.env.local` |
 | MySQL | `.env.local` (host=localhost, db=hinavi, user=ai) | `/var/www/kpi/config/database.php` |
 
 **Gemini 3 系は推論モデル**: `thinkingConfig: { thinkingLevel: 'low' }` 必須。`maxOutputTokens` は思考トークン込みなので 4096 確保している（`src/app/api/generate/route.ts`）。
@@ -131,6 +134,10 @@ mysql -u ai -p hinavi
   - 下半分にキャラ会話（みさきは画像右・セリフ左、ひよりは画像左・セリフ右）
   - セリフは `text-xs`、タイプライター表示 7文字/秒
 - **TTS**: 直前再生終了後に即次へ。ループ側の 10 秒ウェイトのみが間隔制御
+- **TTSエンジン切替**: `src/app/api/tts/route.ts` が `{text, character, engine}` を受け取り、`voicevox` (Sakura) と `elevenlabs` を分岐。
+  - クライアントは `src/lib/client/settings.ts` の `getTtsEngine()` で localStorage (`hinavi.ttsEngine`) を読み、リクエストに含める。デフォルトは `voicevox`
+  - ElevenLabs パラメータは `docs/elevenlabs-tts-api.md` の推奨値 (stability=1.0, similarity_boost=0.75, style=0.0, eleven_v3, ja)
+  - 切替UI: 地図右上の歯車ボタン → ポップアップ(`SettingsOverlay`)で VOICEVOX/ElevenLabs トグル。同ポップアップに LOGOUT ボタンも配置
 - **オフライン**: `navigator.onLine` で検知。圏外時は「ここは圏外のようです」とセリフ欄に表示し5秒ループ。音声フォールバック (`/audio/offline_notice.wav`) は未配置
 
 ## 8. 既知の TODO / 改善候補
@@ -147,6 +154,7 @@ mysql -u ai -p hinavi
 | 低 | 観光的でない `primaryType` のフィルタ | 現状 Places の `includedTypes` で絞っているが、`department_store` や `hotel` も入ってくる。会話に向くものを `primaryType` でさらに絞る |
 | 低 | 会話履歴の整理 UI | `conversations` テーブルは溜まる一方なので、簡易ダッシュボードがあると便利 |
 | 低 | iOS/Safari 対応 | 仕様上スコープ外だが、Wake Lock 以外は動く可能性あり |
+| 低 | TTSデフォルトの再検討 | 現状 `voicevox`。ElevenLabs の常用が確定したら `src/lib/client/settings.ts` の `DEFAULT_ENGINE` を `elevenlabs` に切替 |
 
 ## 9. 参考プロジェクト
 
@@ -162,7 +170,21 @@ mysql -u ai -p hinavi
 
 ## 11. 直近の作業ログ（2026-05-19）
 
-### 実装した変更
+### 実装した変更（2回目: TTS切替・Settings UI）
+
+1. **ElevenLabs TTS 対応**
+   - `.env.local` に `ELEVENLABS_API_KEY` を追加（`/var/www/aicyc/.env.local` から流用）
+   - `lib/characters.ts` に `elevenLabsVoiceId` を追加（みさき=`ugYcuAusTuWCSOpJD0Xd` / ひより=`OSwaPSNdfituxkWcjlkR`）
+   - `app/api/tts/route.ts` を改修。リクエスト形式を `{text, character, engine}` に変更し、`engine === 'elevenlabs'` で ElevenLabs にプロキシ。`voicevox` は従来通り Sakura AI Engine。
+   - `lib/client/tts.ts` の `fetchSpeechAudio(text, character)` へシグネチャ変更し、`getTtsEngine()` を読んで engine を同送
+   - `lib/client/conversationLoop.ts` から `CHARACTERS` import を撤去（character ID をそのまま渡す形に）
+2. **Settings ポップアップ追加**
+   - `lib/client/settings.ts` 新規。`hinavi.ttsEngine` を localStorage に保存（デフォルト `voicevox`）
+   - `components/SettingsOverlay.tsx` 新規。地図右上に歯車ボタン、押下でモーダル表示。TTSトグル + LOGOUT
+   - `app/page.tsx` に `<SettingsOverlay />` を埋め込み（地図コンテナ内、`absolute` レイアウト）
+   - 既存のヘッダーバー等にログアウト導線が無かったので、本ポップアップに集約
+
+### 実装した変更（1回目: ユーザー呼称/プロンプト2系統化）
 
 1. **`users.display_name` カラム追加**（`sql/schema.sql`）
    - 既存DB向けの `ALTER TABLE` 文をコメントで併記
@@ -182,9 +204,12 @@ mysql -u ai -p hinavi
 - [ ] `UPDATE users SET display_name = ... WHERE username = ...` で各ユーザーに日本語呼称を設定
 - [x] `*2.md` のキャラ設定差別化（ユーザー手動編集済み）
 - [x] Rakuten Mini 実機での動作確認（会話成立を確認）
+- [x] ElevenLabs 音声品質の実機確認（ユーザー評価: VOICEVOX より明確に良い）
 
 ### 中断時点の所感（次回の判断材料）
 
 - 奇数/偶数の切替自体は意図通り効いている。ただし2拍子サイクルで単調になりがちと観察（みさき紹介→ひより反応→みさき継続→ひより継続 の繰り返し感）
 - 改善方向の選択肢は §8 の TODO 行参照（A/B/C案）
+- TTS は ElevenLabs の方が品質が良いと確認済。ただしデフォルトは `voicevox` のまま（ハルシネーション/コスト懸念のフォールバック維持）。常用したい場合は §8 に「デフォルトを elevenlabs に切替」のTODOを追加する判断もあり。
+- ElevenLabs ハルシネーション対策の追加防御余地: `playSpeechAudio` のタイムアウト 30秒 → セリフ長×係数の動的算出に変える等。現状暴走報告は無い。
 

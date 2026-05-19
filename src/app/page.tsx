@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import MapView from '@/components/MapView';
 import SpeechRow from '@/components/SpeechRow';
+import SettingsOverlay from '@/components/SettingsOverlay';
 import type { CharacterId } from '@/lib/characters';
 import type { Spot } from '@/lib/types';
 import type { GeoPoint } from '@/lib/client/geo';
@@ -143,6 +144,7 @@ export default function MainPage() {
         >
           {paused ? '再開' : '一時停止'}
         </button>
+        <SettingsOverlay />
       </div>
       <div className="shrink-0 flex flex-col gap-2 py-2">
         <SpeechRow speaker="misaki" text={speech.misaki} side="right" />

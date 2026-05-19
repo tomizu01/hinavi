@@ -1,5 +1,5 @@
 import type { CharacterId } from '@/lib/characters';
-import { CHARACTERS, TURN_ORDER } from '@/lib/characters';
+import { TURN_ORDER } from '@/lib/characters';
 import type { ConversationLine, Spot } from '@/lib/types';
 import { haversineMeters, type GeoPoint } from './geo';
 import { fetchSpeechAudio, loadAudio, playSpeechAudio, stopSpeech } from './tts';
@@ -104,8 +104,7 @@ async function speakAndType(
   cb.onSpeakStart(speaker);
   cb.onTextProgress(speaker, '');
 
-  const speakerId = CHARACTERS[speaker].voicevoxSpeakerId;
-  const audioUrl = await fetchSpeechAudio(text, speakerId);
+  const audioUrl = await fetchSpeechAudio(text, speaker);
 
   let audioMs = 0;
   let audio: HTMLAudioElement | null = null;
