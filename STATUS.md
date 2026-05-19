@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-05-18
+最終更新: 2026-05-19
 
 ## 1. 概要
 
@@ -27,8 +27,10 @@
 ├── sql/schema.sql             users, conversations テーブル
 ├── scripts/create-user.mjs    bcrypt ユーザー作成スクリプト
 ├── prompts/characters/
-│   ├── misaki.md              案内役 みさき (VOICEVOX speaker 2)
-│   └── hiyori.md              盛り上げ役 ひより (VOICEVOX speaker 8)
+│   ├── misaki1.md             案内役 みさき・奇数ターン用 (VOICEVOX speaker 2)
+│   ├── misaki2.md             案内役 みさき・偶数ターン用
+│   ├── hiyori1.md             盛り上げ役 ひより・奇数ターン用 (VOICEVOX speaker 8)
+│   └── hiyori2.md             盛り上げ役 ひより・偶数ターン用
 ├── public/
 │   ├── manifest.webmanifest
 │   ├── sw.js                  Service Worker (本番でのみ登録)
@@ -115,10 +117,15 @@ mysql -u ai -p hinavi
 ## 7. 仕様メモ（実装上のキモ）
 
 - **会話ループ**: `src/lib/client/conversationLoop.ts` の `startConversationLoop()` がエントリ
-  - ターン定義: みさき → ひより の往復1組 = 1ターン
+  - ターン定義: みさき → ひより の往復1組 = 1ターン（`turnNo` は spot 1個ぶんで +1、両話者に同じ番号で渡る）
   - 各発話後 10 秒ウェイト
   - GPS 500m 移動毎に Places 再取得
   - 履歴は 1時間以内かつ直近10件まで Gemini に渡す
+- **プロンプト構成（奇数/偶数で切替）**: `src/app/api/generate/route.ts`
+  - **奇数ターン (variant=1)**: `{misaki,hiyori}1.md` を使用。「キャラ設定 + スポット情報 + 会話履歴 + 次の発話指示」
+  - **偶数ターン (variant=2)**: `{misaki,hiyori}2.md` を使用。スポット情報を省略し「キャラ設定 + 会話履歴 + 次の発話指示」のみ
+  - 判定: `body.turnNo % 2 === 0 ? 2 : 1`（未指定時は variant=1 フォールバック）
+- **ユーザー呼称**: `prompts/characters/*.md` 内の `{user_name}` を `users.display_name` で置換（NULL/空時は `'あなた'` フォールバック）。プロンプト側は `{user_name}さん` の形式で運用。
 - **画面構成**:
   - 地図に「一時停止」ボタンを左上オーバーレイ
   - 下半分にキャラ会話（みさきは画像右・セリフ左、ひよりは画像左・セリフ右）
@@ -132,6 +139,7 @@ mysql -u ai -p hinavi
 |---|---|---|
 | 高 | プロセス常駐 | systemd unit 化（現在 `nohup &`、サーバ再起動で死ぬ） |
 | 高 | 初期パスワード変更 | `ChangeMe123!` のまま運用しない |
+| 中 | 会話の単調さ解消 | 奇数/偶数の2拍子サイクルになりがち。改善案 A=`turnNo % 4` で4種variant化 / B=ランダム or 話者ずらし / C=`*2.md` 側に「直前と同じ切り口を避ける」「N発話に1度ユーザー呼びかけ」等の制約を追加。低コストはC。 |
 | 中 | Google Maps API キー制限 | HTTPリファラを `hinavi.mediowl.ai/*` に絞る／API スコープを限定 |
 | 中 | ALB ヘルスチェック設定 | `GET /login` (200) を使用すれば良い |
 | 中 | 圏外フォールバック音声 | `public/audio/offline_notice.wav` を用意して Service Worker のプリキャッシュに乗せる |
@@ -151,3 +159,32 @@ mysql -u ai -p hinavi
 - ALB: target group → 本EC2 の TCP 6500 へフォワード
 - ACM: `hinavi.mediowl.ai` の証明書発行済
 - DNS: `hinavi.mediowl.ai` → ALB
+
+## 11. 直近の作業ログ（2026-05-19）
+
+### 実装した変更
+
+1. **`users.display_name` カラム追加**（`sql/schema.sql`）
+   - 既存DB向けの `ALTER TABLE` 文をコメントで併記
+2. **プロンプト内のユーザー呼称をDB駆動化**
+   - `prompts/characters/*.md` 内の固定文字列「とみんさん」→ `{user_name}さん` に変更
+   - `/api/generate` で `users.display_name` を SELECT し `{user_name}` を置換
+   - NULL/空時は `'あなた'` にフォールバック（→「あなたさん」になる点は運用でカバー）
+3. **奇数/偶数ターンでプロンプト構造を切替**
+   - `prompts/characters/{misaki,hiyori}1.md` / `{misaki,hiyori}2.md` の2系統に分割
+   - `lib/characters.ts` の `Character` を `promptPaths: { 1, 2 }` 構造に変更
+   - `lib/prompts.ts` の `loadCharacterPrompt(id, variant)` 化（キャッシュキーも variant 込み）
+   - `/api/generate` で `turnNo % 2 === 0` を variant=2 判定、偶数時はスポット情報セクションを省略
+
+### 手動作業 / 未確認
+
+- [ ] 本番DBに `ALTER TABLE users ADD COLUMN display_name VARCHAR(64) DEFAULT NULL AFTER password_hash;` を実行したか確認
+- [ ] `UPDATE users SET display_name = ... WHERE username = ...` で各ユーザーに日本語呼称を設定
+- [x] `*2.md` のキャラ設定差別化（ユーザー手動編集済み）
+- [x] Rakuten Mini 実機での動作確認（会話成立を確認）
+
+### 中断時点の所感（次回の判断材料）
+
+- 奇数/偶数の切替自体は意図通り効いている。ただし2拍子サイクルで単調になりがちと観察（みさき紹介→ひより反応→みさき継続→ひより継続 の繰り返し感）
+- 改善方向の選択肢は §8 の TODO 行参照（A/B/C案）
+
