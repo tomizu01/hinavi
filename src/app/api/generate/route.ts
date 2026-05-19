@@ -16,7 +16,12 @@ interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 }
 
-function buildPrompt(req: GenerateRequest, characterPrompt: string, userName: string): string {
+function buildPrompt(
+  req: GenerateRequest,
+  characterPrompt: string,
+  userName: string,
+  variant: 1 | 2,
+): string {
   const recentHistory = req.history.slice(-10).map((h) => {
     const name = CHARACTERS[h.speaker].displayName;
     return `${name}: ${h.text}`;
@@ -26,15 +31,20 @@ function buildPrompt(req: GenerateRequest, characterPrompt: string, userName: st
   const role = req.speaker === 'misaki' ? '案内役' : '盛り上げ役';
   const filledCharacterPrompt = characterPrompt.replaceAll('{user_name}', userName);
 
-  return `あなたは「${speakerName}」（${role}）として、自転車で走るライダーへの音声案内の会話に参加します。
-
-## キャラクター設定
-${filledCharacterPrompt}
+  const spotSection =
+    variant === 1
+      ? `
 
 ## 現在話題にしているスポット
 - 名称: ${req.spot.name}
 - 位置: 緯度 ${req.spot.lat.toFixed(5)}, 経度 ${req.spot.lng.toFixed(5)}
-- カテゴリ: ${req.spot.types.join(', ')}
+- カテゴリ: ${req.spot.types.join(', ')}`
+      : '';
+
+  return `あなたは「${speakerName}」（${role}）として、自転車で走るライダーへの音声案内の会話に参加します。
+
+## キャラクター設定
+${filledCharacterPrompt}${spotSection}
 
 ## これまでの会話（直近のみ）
 ${recentHistory || '（まだ会話は始まっていません）'}
@@ -56,7 +66,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
 
-  const characterPrompt = await loadCharacterPrompt(body.speaker);
+  const variant: 1 | 2 = typeof body.turnNo === 'number' && body.turnNo % 2 === 0 ? 2 : 1;
+  const characterPrompt = await loadCharacterPrompt(body.speaker, variant);
 
   let userName = DEFAULT_USER_NAME;
   try {
@@ -70,7 +81,7 @@ export async function POST(req: Request) {
     console.error('display_name fetch failed:', err);
   }
 
-  const prompt = buildPrompt(body, characterPrompt, userName);
+  const prompt = buildPrompt(body, characterPrompt, userName, variant);
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
   const res = await fetch(endpoint, {
