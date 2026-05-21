@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-05-19（TTS切替/Settings追加）
+最終更新: 2026-05-21（Gemini 3.5 Flash へ切替）
 
 ## 1. 概要
 
@@ -48,7 +48,7 @@
     │       ├── auth/login/route.ts
     │       ├── auth/logout/route.ts
     │       ├── places/nearby/route.ts   Google Places API (New)
-    │       ├── generate/route.ts        Gemini 3 Flash Preview
+    │       ├── generate/route.ts        Gemini 3.5 Flash
     │       └── tts/route.ts             VOICEVOX(Sakura) / ElevenLabs を engine で分岐
     ├── components/
     │   ├── MapView.tsx          Google Maps JavaScript API + 現在地追従
@@ -74,12 +74,12 @@
 | サービス | キー所在 | プロジェクト共有元 |
 |---|---|---|
 | Google Maps Platform (Maps JS / Places API New) | `.env.local` `GOOGLE_PLACES_API_KEY` / `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | `/var/www/aicyc/.env.local` |
-| Gemini API (`gemini-3-flash-preview`) | `.env.local` `GEMINI_API_KEY` | `/var/www/aicyc/.env.local` |
+| Gemini API (`gemini-3.5-flash`) | `.env.local` `GEMINI_API_KEY` | `/var/www/aicyc/.env.local` |
 | VOICEVOX (Sakura AI Engine `https://api.ai.sakura.ad.jp/tts/v1`) | `.env.local` `SAKURA_AI_TOKEN` | `/var/www/aicyc/.env.local` |
 | ElevenLabs TTS (`eleven_v3`, `mp3_44100_64`, Proプラン契約済) | `.env.local` `ELEVENLABS_API_KEY` | `/var/www/aicyc/.env.local` |
 | MySQL | `.env.local` (host=localhost, db=hinavi, user=ai) | `/var/www/kpi/config/database.php` |
 
-**Gemini 3 系は推論モデル**: `thinkingConfig: { thinkingLevel: 'low' }` 必須。`maxOutputTokens` は思考トークン込みなので 4096 確保している（`src/app/api/generate/route.ts`）。
+**Gemini 3.x 系は推論モデル**: `thinkingConfig: { thinkingLevel: 'low' }` で思考レベルを調整。`maxOutputTokens` は思考トークン込みなので 4096 確保している（`src/app/api/generate/route.ts`）。
 
 ## 5. 初期アカウント
 
@@ -168,9 +168,15 @@ mysql -u ai -p hinavi
 - ACM: `hinavi.mediowl.ai` の証明書発行済
 - DNS: `hinavi.mediowl.ai` → ALB
 
-## 11. 直近の作業ログ（2026-05-19）
+## 11. 直近の作業ログ
 
-### 実装した変更（2回目: TTS切替・Settings UI）
+### 2026-05-21: Gemini 3.5 Flash へ切替
+
+- `.env.local` の `GEMINI_MODEL` を `gemini-3.5-flash` に更新（会話品質が 3.1 Pro 並み、速度向上）
+- `src/app/api/generate/route.ts:13` のフォールバック定数は `gemini-3-flash-preview` のまま（env 優先で問題なし）
+- `thinkingConfig: { thinkingLevel: 'low' }` は 3.5 でも継続使用
+
+### 2026-05-19（2回目: TTS切替・Settings UI）
 
 1. **ElevenLabs TTS 対応**
    - `.env.local` に `ELEVENLABS_API_KEY` を追加（`/var/www/aicyc/.env.local` から流用）
@@ -184,7 +190,7 @@ mysql -u ai -p hinavi
    - `app/page.tsx` に `<SettingsOverlay />` を埋め込み（地図コンテナ内、`absolute` レイアウト）
    - 既存のヘッダーバー等にログアウト導線が無かったので、本ポップアップに集約
 
-### 実装した変更（1回目: ユーザー呼称/プロンプト2系統化）
+### 2026-05-19（1回目: ユーザー呼称/プロンプト2系統化）
 
 1. **`users.display_name` カラム追加**（`sql/schema.sql`）
    - 既存DB向けの `ALTER TABLE` 文をコメントで併記
