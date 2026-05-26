@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-05-21（Gemini 3.5 Flash へ切替）
+最終更新: 2026-05-26（圏外時の会話ループ復帰問題を修正）
 
 ## 1. 概要
 
@@ -138,7 +138,12 @@ mysql -u ai -p hinavi
   - クライアントは `src/lib/client/settings.ts` の `getTtsEngine()` で localStorage (`hinavi.ttsEngine`) を読み、リクエストに含める。デフォルトは `voicevox`
   - ElevenLabs パラメータは `docs/elevenlabs-tts-api.md` の推奨値 (stability=1.0, similarity_boost=0.75, style=0.0, eleven_v3, ja)
   - 切替UI: 地図右上の歯車ボタン → ポップアップ(`SettingsOverlay`)で VOICEVOX/ElevenLabs トグル。同ポップアップに LOGOUT ボタンも配置
-- **オフライン**: `navigator.onLine` で検知。圏外時は「ここは圏外のようです」とセリフ欄に表示し5秒ループ。音声フォールバック (`/audio/offline_notice.wav`) は未配置
+- **オフライン検知（2段構え）**:
+  1. **明示的 offline**: `navigator.onLine === false` を検知
+  2. **暗黙的 offline（ハング検知）**: `navigator.onLine` は不正確で有名（接続性ではなくインターフェース有無しか見ない）なため、`/api/{places/nearby,generate,tts}` の各 fetch にタイムアウト（places=12s / generate=25s / tts=20s）を `AbortController` で設定。2回連続失敗で `OFFLINE_AFTER_FAILS = 2` 経由で圏外ブランチへ強制分岐
+  - 圏外時は「ここは圏外のようです」とセリフ欄に表示し5秒ループ
+  - 圏内復帰: 5秒wait明けに再度 `fetchNearby` を試行 → 成功で `netFails = 0` リセット → 通常運行復帰（復帰検知ラグ目安: 5〜30秒）
+  - 音声フォールバック (`/audio/offline_notice.wav`) は SW プリキャッシュ済だが、再生処理は未実装
 
 ## 8. 既知の TODO / 改善候補
 
@@ -149,7 +154,8 @@ mysql -u ai -p hinavi
 | 中 | 会話の単調さ解消 | 奇数/偶数の2拍子サイクルになりがち。改善案 A=`turnNo % 4` で4種variant化 / B=ランダム or 話者ずらし / C=`*2.md` 側に「直前と同じ切り口を避ける」「N発話に1度ユーザー呼びかけ」等の制約を追加。低コストはC。 |
 | 中 | Google Maps API キー制限 | HTTPリファラを `hinavi.mediowl.ai/*` に絞る／API スコープを限定 |
 | 中 | ALB ヘルスチェック設定 | `GET /login` (200) を使用すれば良い |
-| 中 | 圏外フォールバック音声 | `public/audio/offline_notice.wav` を用意して Service Worker のプリキャッシュに乗せる |
+| 中 | 圏外フォールバック音声 | SW プリキャッシュ対象には入っているが `/audio/offline_notice.wav` ファイル自体が未配置。配置 + クライアント側の再生処理（`onOfflineNotice` 経路）を追加 |
+| 中 | 圏外復帰の早期検知 | 現状ハング検知は2連続失敗（最悪 ~30秒）。軽量ping (`/api/health` を追加して `HEAD` 等) を圏外ブランチ内で叩き、復帰を秒単位で検知することも可能 |
 | 低 | ログの永続化 | `/var/log/hinavi/` 等に出力先変更 |
 | 低 | 観光的でない `primaryType` のフィルタ | 現状 Places の `includedTypes` で絞っているが、`department_store` や `hotel` も入ってくる。会話に向くものを `primaryType` でさらに絞る |
 | 低 | 会話履歴の整理 UI | `conversations` テーブルは溜まる一方なので、簡易ダッシュボードがあると便利 |
@@ -170,7 +176,20 @@ mysql -u ai -p hinavi
 
 ## 11. 直近の作業ログ
 
-### 2026-05-21: Gemini 3.5 Flash へ切替
+### 2026-05-26: 圏外時の会話ループ復帰問題を修正
+
+**背景**: 山奥フィールドテストで、TTS中に電波が切れた後、圏内復帰しても会話が再開しなかった。
+
+**原因**: `/api/generate`, `/api/tts`, `/api/places/nearby` の `fetch` にタイムアウトが無く、TCP接続を張ったまま応答が返らない状態（モバイル網のハンドオフ等で発生）になると `fetch` が永久ハングし、電波復帰してもハングしたコネクションは自動回復しないためループが停止していた。`navigator.onLine` 経路にも入らないので回復ロジックが発火しなかった。
+
+**修正** (`src/lib/client/tts.ts`, `src/lib/client/conversationLoop.ts`):
+- `fetchWithTimeout(input, init, timeoutMs)` を `tts.ts` に追加（`AbortController + setTimeout`）。`conversationLoop.ts` からも import
+- 3つの fetch にタイムアウト適用: places=12s / generate=25s / tts=20s
+- `fetchSpeechAudio` を「エラー時 null 返却」から「throw する」に変更。呼び出し側 `speakAndType` で try/catch して `{ netError: boolean }` を返す形に
+- 連続失敗カウンタ `netFails` を導入。`OFFLINE_AFTER_FAILS = 2` 回失敗で `navigator.onLine` を信用せず強制的に「圏外」ブランチに分岐し、`onOfflineNotice` 表示 + 5秒待機 + カウンタリセット
+- 任意の `fetchNearby` / `generate` / TTS 取得が成功すれば `netFails = 0` リセット
+
+**注**: タイムアウト値は山奥での Gemini 思考遅延を考慮した余裕値。実機テストで詰める余地あり。
 
 - `.env.local` の `GEMINI_MODEL` を `gemini-3.5-flash` に更新（会話品質が 3.1 Pro 並み、速度向上）
 - `src/app/api/generate/route.ts:13` のフォールバック定数は `gemini-3-flash-preview` のまま（env 優先で問題なし）

@@ -2,13 +2,16 @@ import type { CharacterId } from '@/lib/characters';
 import { TURN_ORDER } from '@/lib/characters';
 import type { ConversationLine, Spot } from '@/lib/types';
 import { haversineMeters, type GeoPoint } from './geo';
-import { fetchSpeechAudio, loadAudio, playSpeechAudio, stopSpeech } from './tts';
+import { fetchSpeechAudio, fetchWithTimeout, loadAudio, playSpeechAudio, stopSpeech } from './tts';
 
 const REFETCH_DISTANCE_M = 500;
 const HISTORY_HOURS = 1;
 const HISTORY_MAX = 10;
 const WAIT_BETWEEN_MS = 10_000;
 const TYPING_CHARS_PER_SEC = 7;
+const PLACES_TIMEOUT_MS = 12_000;
+const GENERATE_TIMEOUT_MS = 25_000;
+const OFFLINE_AFTER_FAILS = 2;
 
 export interface LoopCallbacks {
   getPosition: () => GeoPoint | null;
@@ -27,11 +30,15 @@ interface FetchResult {
 }
 
 async function fetchNearby(p: GeoPoint): Promise<Spot[]> {
-  const res = await fetch('/api/places/nearby', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lat: p.lat, lng: p.lng, radius: 2000 }),
-  });
+  const res = await fetchWithTimeout(
+    '/api/places/nearby',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: p.lat, lng: p.lng, radius: 2000 }),
+    },
+    PLACES_TIMEOUT_MS,
+  );
   if (!res.ok) throw new Error(`places ${res.status}`);
   const data = (await res.json()) as { spots: Spot[] };
   return data.spots ?? [];
@@ -44,11 +51,15 @@ async function generate(
   sessionId: string,
   turnNo: number,
 ): Promise<string> {
-  const res = await fetch('/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ speaker, spot, history, sessionId, turnNo }),
-  });
+  const res = await fetchWithTimeout(
+    '/api/generate',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speaker, spot, history, sessionId, turnNo }),
+    },
+    GENERATE_TIMEOUT_MS,
+  );
   if (!res.ok) throw new Error(`generate ${res.status}`);
   const data = (await res.json()) as { text: string };
   return data.text;
@@ -100,11 +111,18 @@ async function speakAndType(
   text: string,
   cb: LoopCallbacks,
   abortSignal: { aborted: boolean },
-): Promise<void> {
+): Promise<{ netError: boolean }> {
   cb.onSpeakStart(speaker);
   cb.onTextProgress(speaker, '');
 
-  const audioUrl = await fetchSpeechAudio(text, speaker);
+  let audioUrl: string | null = null;
+  let netError = false;
+  try {
+    audioUrl = await fetchSpeechAudio(text, speaker);
+  } catch (err) {
+    console.error('tts fetch failed:', err);
+    netError = true;
+  }
 
   let audioMs = 0;
   let audio: HTMLAudioElement | null = null;
@@ -118,6 +136,7 @@ async function speakAndType(
     typewriter(speaker, text, cb.onTextProgress, audioMs, abortSignal),
     playPromise,
   ]);
+  return { netError };
 }
 
 async function wait(ms: number, abortSignal: { aborted: boolean }): Promise<void> {
@@ -145,6 +164,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
   let currentSpot: Spot | null = null;
   const history: ConversationLine[] = [];
   let turnNo = 0;
+  let netFails = 0;
 
   (async () => {
     while (!abortSignal.aborted) {
@@ -153,9 +173,10 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
       }
       if (abortSignal.aborted) return;
 
-      if (!cb.isOnline()) {
+      if (!cb.isOnline() || netFails >= OFFLINE_AFTER_FAILS) {
         await cb.onOfflineNotice();
         await wait(5000, abortSignal);
+        netFails = 0;
         continue;
       }
 
@@ -170,9 +191,12 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         if (!lastFetch || haversineMeters(pos, lastFetch.origin) >= REFETCH_DISTANCE_M) {
           const spots = await fetchNearby(pos);
           if (spots.length > 0) lastFetch = { spots, origin: pos };
+          netFails = 0;
         }
       } catch (err) {
         console.error('places fetch failed:', err);
+        netFails += 1;
+        continue;
       }
       if (!lastFetch || lastFetch.spots.length === 0) {
         await wait(3000, abortSignal);
@@ -188,6 +212,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
       cb.onSpotChange(currentSpot);
       turnNo += 1;
 
+      let bailToOffline = false;
       for (const speaker of TURN_ORDER) {
         if (abortSignal.aborted) return;
         while (cb.isPaused() && !abortSignal.aborted) await wait(500, abortSignal);
@@ -196,12 +221,27 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         let text: string;
         try {
           text = await generate(speaker, currentSpot, filterHistory(history), sessionId, turnNo);
+          netFails = 0;
         } catch (err) {
           console.error('generate failed:', err);
+          netFails += 1;
+          if (netFails >= OFFLINE_AFTER_FAILS) {
+            bailToOffline = true;
+            break;
+          }
           await wait(3000, abortSignal);
           continue;
         }
-        await speakAndType(speaker, text, cb, abortSignal);
+        const { netError } = await speakAndType(speaker, text, cb, abortSignal);
+        if (netError) {
+          netFails += 1;
+          if (netFails >= OFFLINE_AFTER_FAILS) {
+            bailToOffline = true;
+            break;
+          }
+        } else {
+          netFails = 0;
+        }
         const line: ConversationLine = {
           speaker,
           text,
@@ -212,6 +252,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         cb.onSpeakEnd(speaker, text, currentSpot);
         await wait(WAIT_BETWEEN_MS, abortSignal);
       }
+      if (bailToOffline) continue;
     }
   })().catch((err) => console.error('loop crashed:', err));
 

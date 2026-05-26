@@ -15,24 +15,36 @@ export function stopSpeech(): void {
 import type { CharacterId } from '@/lib/characters';
 import { getTtsEngine } from './settings';
 
+const TTS_TIMEOUT_MS = 20_000;
+
+export async function fetchWithTimeout(
+  input: RequestInfo,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchSpeechAudio(text: string, character: CharacterId): Promise<string | null> {
   if (!text.trim()) return null;
-  try {
-    const res = await fetch('/api/tts', {
+  const res = await fetchWithTimeout(
+    '/api/tts',
+    {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, character, engine: getTtsEngine() }),
-    });
-    if (!res.ok) {
-      console.error('[TTS] api error:', res.status);
-      return null;
-    }
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
-  } catch (err) {
-    console.error('[TTS] fetch failed:', err);
-    return null;
-  }
+    },
+    TTS_TIMEOUT_MS,
+  );
+  if (!res.ok) throw new Error(`tts ${res.status}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
 }
 
 export function loadAudio(url: string): Promise<HTMLAudioElement | null> {
