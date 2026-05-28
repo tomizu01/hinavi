@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-05-26（圏外時の会話ループ復帰問題を修正）
+最終更新: 2026-05-28（VOICEVOX/Sakura → Aivis Cloud API へ差し替え）
 
 ## 1. 概要
 
@@ -27,9 +27,9 @@
 ├── sql/schema.sql             users, conversations テーブル
 ├── scripts/create-user.mjs    bcrypt ユーザー作成スクリプト
 ├── prompts/characters/
-│   ├── misaki1.md             案内役 みさき・奇数ターン用 (VOICEVOX speaker 2 / ElevenLabs ugYcuAusTuWCSOpJD0Xd)
+│   ├── misaki1.md             案内役 みさき・奇数ターン用 (Aivis model e9339137... / ElevenLabs ugYcuAusTuWCSOpJD0Xd)
 │   ├── misaki2.md             案内役 みさき・偶数ターン用
-│   ├── hiyori1.md             盛り上げ役 ひより・奇数ターン用 (VOICEVOX speaker 8 / ElevenLabs OSwaPSNdfituxkWcjlkR)
+│   ├── hiyori1.md             盛り上げ役 ひより・奇数ターン用 (Aivis model 734c12b6... / ElevenLabs OSwaPSNdfituxkWcjlkR)
 │   └── hiyori2.md             盛り上げ役 ひより・偶数ターン用
 ├── public/
 │   ├── manifest.webmanifest
@@ -49,7 +49,7 @@
     │       ├── auth/logout/route.ts
     │       ├── places/nearby/route.ts   Google Places API (New)
     │       ├── generate/route.ts        Gemini 3.5 Flash
-    │       └── tts/route.ts             VOICEVOX(Sakura) / ElevenLabs を engine で分岐
+    │       └── tts/route.ts             Aivis Cloud / ElevenLabs を engine で分岐
     ├── components/
     │   ├── MapView.tsx          Google Maps JavaScript API + 現在地追従
     │   ├── SpeechRow.tsx        キャラ画像 + セリフバブル
@@ -58,7 +58,7 @@
     └── lib/
         ├── db.ts              mysql2 connection pool
         ├── session.ts         iron-session 設定
-        ├── characters.ts      みさき/ひより の定義 (voicevoxSpeakerId, elevenLabsVoiceId)
+        ├── characters.ts      みさき/ひより の定義 (aivisModelUuid, elevenLabsVoiceId)
         ├── prompts.ts         md ファイルを起動時にメモリキャッシュ
         ├── types.ts
         └── client/
@@ -75,8 +75,9 @@
 |---|---|---|
 | Google Maps Platform (Maps JS / Places API New) | `.env.local` `GOOGLE_PLACES_API_KEY` / `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | `/var/www/aicyc/.env.local` |
 | Gemini API (`gemini-3.5-flash`) | `.env.local` `GEMINI_API_KEY` | `/var/www/aicyc/.env.local` |
-| VOICEVOX (Sakura AI Engine `https://api.ai.sakura.ad.jp/tts/v1`) | `.env.local` `SAKURA_AI_TOKEN` | `/var/www/aicyc/.env.local` |
+| Aivis Cloud API (`POST /v1/tts/synthesize`, Premium プラン契約済, RPM 10) | `.env.local` `AIVIS_CLOUD_API_TOKEN` | hinavi 専用に発行 |
 | ElevenLabs TTS (`eleven_v3`, `mp3_44100_64`, Proプラン契約済) | `.env.local` `ELEVENLABS_API_KEY` | `/var/www/aicyc/.env.local` |
+| (旧) VOICEVOX (Sakura AI Engine) | `.env.local` `SAKURA_AI_TOKEN`（残置・未使用） | `/var/www/aicyc/.env.local` |
 | MySQL | `.env.local` (host=localhost, db=hinavi, user=ai) | `/var/www/kpi/config/database.php` |
 
 **Gemini 3.x 系は推論モデル**: `thinkingConfig: { thinkingLevel: 'low' }` で思考レベルを調整。`maxOutputTokens` は思考トークン込みなので 4096 確保している（`src/app/api/generate/route.ts`）。
@@ -134,10 +135,12 @@ mysql -u ai -p hinavi
   - 下半分にキャラ会話（みさきは画像右・セリフ左、ひよりは画像左・セリフ右）
   - セリフは `text-xs`、タイプライター表示 7文字/秒
 - **TTS**: 直前再生終了後に即次へ。ループ側の 10 秒ウェイトのみが間隔制御
-- **TTSエンジン切替**: `src/app/api/tts/route.ts` が `{text, character, engine}` を受け取り、`voicevox` (Sakura) と `elevenlabs` を分岐。
-  - クライアントは `src/lib/client/settings.ts` の `getTtsEngine()` で localStorage (`hinavi.ttsEngine`) を読み、リクエストに含める。デフォルトは `voicevox`
+- **TTSエンジン切替**: `src/app/api/tts/route.ts` が `{text, character, engine}` を受け取り、`aivis` (Aivis Cloud API) と `elevenlabs` を分岐。
+  - クライアントは `src/lib/client/settings.ts` の `getTtsEngine()` で localStorage (`hinavi.ttsEngine`) を読み、リクエストに含める。デフォルトは `aivis`
+  - Aivis Cloud: `POST https://api.aivis-project.com/v1/tts/synthesize` に `{model_uuid, text, output_format:"mp3", use_ssml:false}` を Bearer 認証で送信、`audio/mpeg` を直接返す
   - ElevenLabs パラメータは `docs/elevenlabs-tts-api.md` の推奨値 (stability=1.0, similarity_boost=0.75, style=0.0, eleven_v3, ja)
-  - 切替UI: 地図右上の歯車ボタン → ポップアップ(`SettingsOverlay`)で VOICEVOX/ElevenLabs トグル。同ポップアップに LOGOUT ボタンも配置
+  - 切替UI: 地図右上の歯車ボタン → ポップアップ(`SettingsOverlay`)で Aivis/ElevenLabs トグル。同ポップアップに LOGOUT ボタンも配置
+  - Aivis Cloud のレート制限: Premium プランで RPM 10。開発中は同時利用しない前提。本番は自前サーバへの移管を検討
 - **オフライン検知（2段構え）**:
   1. **明示的 offline**: `navigator.onLine === false` を検知
   2. **暗黙的 offline（ハング検知）**: `navigator.onLine` は不正確で有名（接続性ではなくインターフェース有無しか見ない）なため、`/api/{places/nearby,generate,tts}` の各 fetch にタイムアウト（places=12s / generate=25s / tts=20s）を `AbortController` で設定。2回連続失敗で `OFFLINE_AFTER_FAILS = 2` 経由で圏外ブランチへ強制分岐
@@ -160,11 +163,12 @@ mysql -u ai -p hinavi
 | 低 | 観光的でない `primaryType` のフィルタ | 現状 Places の `includedTypes` で絞っているが、`department_store` や `hotel` も入ってくる。会話に向くものを `primaryType` でさらに絞る |
 | 低 | 会話履歴の整理 UI | `conversations` テーブルは溜まる一方なので、簡易ダッシュボードがあると便利 |
 | 低 | iOS/Safari 対応 | 仕様上スコープ外だが、Wake Lock 以外は動く可能性あり |
-| 低 | TTSデフォルトの再検討 | 現状 `voicevox`。ElevenLabs の常用が確定したら `src/lib/client/settings.ts` の `DEFAULT_ENGINE` を `elevenlabs` に切替 |
+| 低 | TTSデフォルトの再検討 | 現状 `aivis`。ElevenLabs の常用が確定したら `src/lib/client/settings.ts` の `DEFAULT_ENGINE` を `elevenlabs` に切替 |
+| 低 | Aivis Cloud 本番運用検討 | 本番は自前サーバ（AivisSpeech Engine セルフホスト）への移管予定。Cloud のままだと RPM 10 上限がボトルネック |
 
 ## 9. 参考プロジェクト
 
-- `/var/www/aicyc/` — VOICEVOX, Gemini, Sakura AI Engine の利用パターンの参照元
+- `/var/www/aicyc/` — Gemini, Sakura AI Engine の利用パターンの参照元（VOICEVOX は本プロジェクトでは Aivis に置き換え済）
 - `/var/www/kpi/` — MySQL 接続情報の参照元
 
 ## 10. インフラ（手動設定済み）
@@ -175,6 +179,30 @@ mysql -u ai -p hinavi
 - DNS: `hinavi.mediowl.ai` → ALB
 
 ## 11. 直近の作業ログ
+
+### 2026-05-28: VOICEVOX(Sakura) → Aivis Cloud API へ差し替え
+
+**背景**: 音声品質向上のため、Sakura AI Engine の VOICEVOX を Aivis Cloud API へ置き換え。ElevenLabs は継続。
+
+**変更点**:
+- `.env.local` に `AIVIS_CLOUD_API_TOKEN` を追加（Premium プラン、RPM 10）
+- `src/lib/characters.ts`: `voicevoxSpeakerId` を削除し `aivisModelUuid` に置換
+  - みさき: `e9339137-2ae3-4d41-9394-fb757a7e61e6`
+  - ひより: `734c12b6-eaf2-4dbd-8596-8663c72d2afa`
+  - ※研究開発用モデル。実用化時は独自モデル作成予定
+- `src/app/api/tts/route.ts`: `synthesizeVoicevox` を削除し `synthesizeAivis` を実装
+  - エンドポイント: `POST https://api.aivis-project.com/v1/tts/synthesize`
+  - 認証: `Authorization: Bearer $AIVIS_CLOUD_API_TOKEN`
+  - リクエスト: `{model_uuid, text, output_format:"mp3", use_ssml:false}`
+  - レスポンス: `audio/mpeg` をそのままクライアントへ返す（VOICEVOX 時代の audio_query → synthesis の2段呼び出しは不要に）
+- `src/lib/client/settings.ts`: engine 名を `voicevox` → `aivis` に変更、デフォルトも `aivis` に
+- `src/components/SettingsOverlay.tsx`: トグルラベルを「VOICEVOX」→「Aivis」へ
+- 旧 `SAKURA_AI_TOKEN` は `.env.local` に残置（未使用、ロールバック用に温存）
+
+**注意点**:
+- Aivis Cloud は SSML を text に書くと解釈する仕様（デフォルト ON）。Gemini 生成テキストに記号が紛れる可能性があるので、念のため `use_ssml: false` で固定
+- VOICEVOX 互換と聞いていたが、実際は Aivis 独自の `/v1/tts/synthesize` 単一エンドポイント。互換性は内部の音声合成エンジン（AivisSpeech / VOICEVOX 系列）レベルの話で、API 形状は別物
+- 出力 MP3 は 192kbps / 44.1kHz / Mono（モデルデフォルト）
 
 ### 2026-05-26: 圏外時の会話ループ復帰問題を修正
 

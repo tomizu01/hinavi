@@ -4,10 +4,10 @@ import { CHARACTERS, type CharacterId } from '@/lib/characters';
 
 export const runtime = 'nodejs';
 
-const SAKURA_BASE = 'https://api.ai.sakura.ad.jp/tts/v1';
+const AIVIS_SYNTHESIZE_URL = 'https://api.aivis-project.com/v1/tts/synthesize';
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1/text-to-speech';
 
-type TtsEngine = 'voicevox' | 'elevenlabs';
+type TtsEngine = 'aivis' | 'elevenlabs';
 
 interface ReqBody {
   text?: string;
@@ -26,56 +26,49 @@ export async function POST(req: Request) {
   if (!body.character || !(body.character in CHARACTERS)) {
     return NextResponse.json({ error: 'invalid character' }, { status: 400 });
   }
-  const engine: TtsEngine = body.engine === 'elevenlabs' ? 'elevenlabs' : 'voicevox';
+  const engine: TtsEngine = body.engine === 'elevenlabs' ? 'elevenlabs' : 'aivis';
   const character = CHARACTERS[body.character];
 
   if (engine === 'elevenlabs') {
     return synthesizeElevenLabs(body.text, character.elevenLabsVoiceId);
   }
-  return synthesizeVoicevox(body.text, character.voicevoxSpeakerId);
+  return synthesizeAivis(body.text, character.aivisModelUuid);
 }
 
-async function synthesizeVoicevox(text: string, speakerId: number) {
-  const token = process.env.SAKURA_AI_TOKEN;
-  if (!token) return NextResponse.json({ error: 'tts token not configured' }, { status: 500 });
-  const headers = { Authorization: `Bearer ${token}` };
+async function synthesizeAivis(text: string, modelUuid: string) {
+  const token = process.env.AIVIS_CLOUD_API_TOKEN;
+  if (!token) return NextResponse.json({ error: 'aivis token not configured' }, { status: 500 });
 
   try {
-    const queryRes = await fetch(
-      `${SAKURA_BASE}/audio_query?${new URLSearchParams({ text, speaker: String(speakerId) })}`,
-      { method: 'POST', headers },
-    );
-    if (!queryRes.ok) {
-      const detail = await queryRes.text();
-      console.error('Sakura audio_query failed:', queryRes.status, detail);
-      return NextResponse.json({ error: 'audio_query failed' }, { status: 502 });
-    }
-    const audioQuery = await queryRes.json();
-
-    const synthRes = await fetch(
-      `${SAKURA_BASE}/synthesis?${new URLSearchParams({ speaker: String(speakerId) })}`,
-      {
-        method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify(audioQuery),
+    const res = await fetch(AIVIS_SYNTHESIZE_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'audio/mpeg',
       },
-    );
-    if (!synthRes.ok) {
-      const detail = await synthRes.text();
-      console.error('Sakura synthesis failed:', synthRes.status, detail);
-      return NextResponse.json({ error: 'synthesis failed' }, { status: 502 });
+      body: JSON.stringify({
+        model_uuid: modelUuid,
+        text,
+        output_format: 'mp3',
+        use_ssml: false,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      console.error('Aivis synthesis failed:', res.status, detail);
+      return NextResponse.json({ error: 'aivis failed' }, { status: 502 });
     }
-
-    const wavBuffer = await synthRes.arrayBuffer();
-    return new NextResponse(wavBuffer, {
+    const mp3Buffer = await res.arrayBuffer();
+    return new NextResponse(mp3Buffer, {
       status: 200,
       headers: {
-        'Content-Type': 'audio/wav',
-        'Content-Length': String(wavBuffer.byteLength),
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': String(mp3Buffer.byteLength),
       },
     });
   } catch (err) {
-    console.error('Sakura TTS proxy error:', err);
+    console.error('Aivis TTS proxy error:', err);
     return NextResponse.json({ error: 'tts unavailable' }, { status: 502 });
   }
 }

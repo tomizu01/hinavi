@@ -1,13 +1,16 @@
-export type TtsEngine = 'voicevox' | 'elevenlabs';
+export type TtsEngine = 'aivis' | 'elevenlabs';
 
 const TTS_ENGINE_KEY = 'hinavi.ttsEngine';
-const DEFAULT_ENGINE: TtsEngine = 'voicevox';
+const DEFAULT_ENGINE: TtsEngine = 'aivis';
 
 export function getTtsEngine(): TtsEngine {
   if (typeof window === 'undefined') return DEFAULT_ENGINE;
   try {
     const v = window.localStorage.getItem(TTS_ENGINE_KEY);
-    return v === 'elevenlabs' ? 'elevenlabs' : 'voicevox';
+    if (v === 'elevenlabs') return 'elevenlabs';
+    if (v === 'aivis') return 'aivis';
+    // Legacy value migration: 旧 'voicevox' 設定は Aivis に寄せる
+    return DEFAULT_ENGINE;
   } catch {
     return DEFAULT_ENGINE;
   }

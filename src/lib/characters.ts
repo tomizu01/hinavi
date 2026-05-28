@@ -6,7 +6,7 @@ export interface Character {
   id: CharacterId;
   displayName: string;
   imagePath: string;
-  voicevoxSpeakerId: number;
+  aivisModelUuid: string;
   elevenLabsVoiceId: string;
   promptPaths: Record<PromptVariant, string>;
 }
@@ -16,7 +16,7 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     id: 'misaki',
     displayName: 'みさき',
     imagePath: '/characters/misaki.png',
-    voicevoxSpeakerId: 2,
+    aivisModelUuid: 'e9339137-2ae3-4d41-9394-fb757a7e61e6',
     elevenLabsVoiceId: 'ugYcuAusTuWCSOpJD0Xd',
     promptPaths: {
       1: 'prompts/characters/misaki1.md',
@@ -27,7 +27,7 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     id: 'hiyori',
     displayName: 'ひより',
     imagePath: '/characters/hiyori.png',
-    voicevoxSpeakerId: 8,
+    aivisModelUuid: '734c12b6-eaf2-4dbd-8596-8663c72d2afa',
     elevenLabsVoiceId: 'OSwaPSNdfituxkWcjlkR',
     promptPaths: {
       1: 'prompts/characters/hiyori1.md',

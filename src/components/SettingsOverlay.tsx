@@ -5,7 +5,7 @@ import { getTtsEngine, setTtsEngine, type TtsEngine } from '@/lib/client/setting
 
 export default function SettingsOverlay() {
   const [open, setOpen] = useState(false);
-  const [engine, setEngineState] = useState<TtsEngine>('voicevox');
+  const [engine, setEngineState] = useState<TtsEngine>('aivis');
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
@@ -65,14 +65,14 @@ export default function SettingsOverlay() {
               <div className="text-xs text-neutral-400">TTS</div>
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => handleEngineChange('voicevox')}
+                  onClick={() => handleEngineChange('aivis')}
                   className={`px-3 py-2 rounded-lg text-sm font-medium border ${
-                    engine === 'voicevox'
+                    engine === 'aivis'
                       ? 'bg-emerald-600 border-emerald-500 text-white'
                       : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
                   }`}
                 >
-                  VOICEVOX
+                  Aivis
                 </button>
                 <button
                   onClick={() => handleEngineChange('elevenlabs')}
