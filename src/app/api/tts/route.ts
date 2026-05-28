@@ -52,6 +52,7 @@ async function synthesizeAivis(text: string, modelUuid: string) {
         text,
         output_format: 'mp3',
         use_ssml: false,
+        tempo_dynamics: 1.5,
       }),
     });
     if (!res.ok) {

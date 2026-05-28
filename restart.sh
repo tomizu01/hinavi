@@ -27,4 +27,5 @@ echo "Building..."
 npm run build
 
 echo "Starting production server..."
-npm run start >/dev/null 2>&1 &
+LOGFILE="/var/log/hinavi/server-$(date +%Y%m%d-%H%M%S).log"
+nohup npm run start > "$LOGFILE" 2>&1 &

@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-05-28（VOICEVOX/Sakura → Aivis Cloud API へ差し替え）
+最終更新: 2026-05-28（Aivis Cloud 定着・VOICEVOX 廃止確定）
 
 ## 1. 概要
 
@@ -12,7 +12,7 @@
 - **本番URL**: `https://hinavi.mediowl.ai` (ALB + ACM 経由、ALB → EC2 6500 ポートにフォワード)
 - **PWA インストール確認済み**（Android Chrome でホーム画面追加成功）
 - 起動中プロセス: `next start -p 6500`（`/var/www/hinavi/` で起動）
-- ログ: `/tmp/hinavi-server.log`（再起動で消える点は要改善）
+- ログ: `/var/log/hinavi/server-YYYYMMDD-HHMMSS.log`（起動毎にタイムスタンプ付きで永続化）
 
 ## 3. ディレクトリ構成
 
@@ -75,9 +75,8 @@
 |---|---|---|
 | Google Maps Platform (Maps JS / Places API New) | `.env.local` `GOOGLE_PLACES_API_KEY` / `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | `/var/www/aicyc/.env.local` |
 | Gemini API (`gemini-3.5-flash`) | `.env.local` `GEMINI_API_KEY` | `/var/www/aicyc/.env.local` |
-| Aivis Cloud API (`POST /v1/tts/synthesize`, Premium プラン契約済, RPM 10) | `.env.local` `AIVIS_CLOUD_API_TOKEN` | hinavi 専用に発行 |
+| Aivis Cloud API (`POST /v1/tts/synthesize`, Premium プラン定額, RPM 10) | `.env.local` `AIVIS_CLOUD_API_TOKEN` | hinavi 専用に発行 |
 | ElevenLabs TTS (`eleven_v3`, `mp3_44100_64`, Proプラン契約済) | `.env.local` `ELEVENLABS_API_KEY` | `/var/www/aicyc/.env.local` |
-| (旧) VOICEVOX (Sakura AI Engine) | `.env.local` `SAKURA_AI_TOKEN`（残置・未使用） | `/var/www/aicyc/.env.local` |
 | MySQL | `.env.local` (host=localhost, db=hinavi, user=ai) | `/var/www/kpi/config/database.php` |
 
 **Gemini 3.x 系は推論モデル**: `thinkingConfig: { thinkingLevel: 'low' }` で思考レベルを調整。`maxOutputTokens` は思考トークン込みなので 4096 確保している（`src/app/api/generate/route.ts`）。
@@ -93,12 +92,18 @@
 ### 再起動
 
 ```bash
-kill -9 $(lsof -ti tcp:6500) 2>/dev/null
+# 6500 を握っているプロセスを落とす（lsof は権限の都合で失敗することがあるので ss から取得）
+PID=$(ss -tlnp 2>/dev/null | awk '/:6500 /{match($0,/pid=([0-9]+)/,a); print a[1]; exit}')
+[ -n "$PID" ] && kill -9 $PID
 cd /var/www/hinavi
 npm run build
-nohup npm run start > /tmp/hinavi-server.log 2>&1 &
+LOGFILE="/var/log/hinavi/server-$(date +%Y%m%d-%H%M%S).log"
+nohup npm run start > "$LOGFILE" 2>&1 &
 disown
+echo "log: $LOGFILE"
 ```
+
+ログディレクトリ `/var/log/hinavi/` は ec2-user 所有・755。起動毎に新規ファイルが作られるので、古いログは適宜 `find /var/log/hinavi -name 'server-*.log' -mtime +30 -delete` 等で間引き。
 
 ### プロンプト編集後
 
@@ -107,7 +112,8 @@ disown
 ### ログ確認
 
 ```bash
-tail -f /tmp/hinavi-server.log
+# 最新のサーバーログを追尾
+tail -f $(ls -t /var/log/hinavi/server-*.log | head -1)
 ```
 
 ### DB 確認
@@ -137,10 +143,11 @@ mysql -u ai -p hinavi
 - **TTS**: 直前再生終了後に即次へ。ループ側の 10 秒ウェイトのみが間隔制御
 - **TTSエンジン切替**: `src/app/api/tts/route.ts` が `{text, character, engine}` を受け取り、`aivis` (Aivis Cloud API) と `elevenlabs` を分岐。
   - クライアントは `src/lib/client/settings.ts` の `getTtsEngine()` で localStorage (`hinavi.ttsEngine`) を読み、リクエストに含める。デフォルトは `aivis`
-  - Aivis Cloud: `POST https://api.aivis-project.com/v1/tts/synthesize` に `{model_uuid, text, output_format:"mp3", use_ssml:false}` を Bearer 認証で送信、`audio/mpeg` を直接返す
+  - Aivis Cloud: `POST https://api.aivis-project.com/v1/tts/synthesize` に `{model_uuid, text, output_format:"mp3", use_ssml:false, tempo_dynamics:1.5}` を Bearer 認証で送信、`audio/mpeg` を直接返す
+  - `tempo_dynamics: 1.5` は抑揚を強める目的（デフォルト 1.0 では ElevenLabs と比べて棒読み寄りに聞こえたため）
   - ElevenLabs パラメータは `docs/elevenlabs-tts-api.md` の推奨値 (stability=1.0, similarity_boost=0.75, style=0.0, eleven_v3, ja)
   - 切替UI: 地図右上の歯車ボタン → ポップアップ(`SettingsOverlay`)で Aivis/ElevenLabs トグル。同ポップアップに LOGOUT ボタンも配置
-  - Aivis Cloud のレート制限: Premium プランで RPM 10。開発中は同時利用しない前提。本番は自前サーバへの移管を検討
+  - Aivis Cloud のレート制限: Premium プラン**定額**で RPM 10。開発中は同時利用しない前提。本番は自前サーバ（AivisSpeech Engine セルフホスト）への移管を検討
 - **オフライン検知（2段構え）**:
   1. **明示的 offline**: `navigator.onLine === false` を検知
   2. **暗黙的 offline（ハング検知）**: `navigator.onLine` は不正確で有名（接続性ではなくインターフェース有無しか見ない）なため、`/api/{places/nearby,generate,tts}` の各 fetch にタイムアウト（places=12s / generate=25s / tts=20s）を `AbortController` で設定。2回連続失敗で `OFFLINE_AFTER_FAILS = 2` 経由で圏外ブランチへ強制分岐
@@ -159,12 +166,13 @@ mysql -u ai -p hinavi
 | 中 | ALB ヘルスチェック設定 | `GET /login` (200) を使用すれば良い |
 | 中 | 圏外フォールバック音声 | SW プリキャッシュ対象には入っているが `/audio/offline_notice.wav` ファイル自体が未配置。配置 + クライアント側の再生処理（`onOfflineNotice` 経路）を追加 |
 | 中 | 圏外復帰の早期検知 | 現状ハング検知は2連続失敗（最悪 ~30秒）。軽量ping (`/api/health` を追加して `HEAD` 等) を圏外ブランチ内で叩き、復帰を秒単位で検知することも可能 |
-| 低 | ログの永続化 | `/var/log/hinavi/` 等に出力先変更 |
+| 低 | ログのローテーション | `/var/log/hinavi/` に永続化済（2026-05-28）。長期運用するなら logrotate 設定追加を検討 |
 | 低 | 観光的でない `primaryType` のフィルタ | 現状 Places の `includedTypes` で絞っているが、`department_store` や `hotel` も入ってくる。会話に向くものを `primaryType` でさらに絞る |
 | 低 | 会話履歴の整理 UI | `conversations` テーブルは溜まる一方なので、簡易ダッシュボードがあると便利 |
 | 低 | iOS/Safari 対応 | 仕様上スコープ外だが、Wake Lock 以外は動く可能性あり |
-| 低 | TTSデフォルトの再検討 | 現状 `aivis`。ElevenLabs の常用が確定したら `src/lib/client/settings.ts` の `DEFAULT_ENGINE` を `elevenlabs` に切替 |
-| 低 | Aivis Cloud 本番運用検討 | 本番は自前サーバ（AivisSpeech Engine セルフホスト）への移管予定。Cloud のままだと RPM 10 上限がボトルネック |
+| 中 | Aivis Cloud 本番運用検討 | 本番は自前サーバ（AivisSpeech Engine セルフホスト）への移管予定。Cloud は Premium 定額だが RPM 10 上限が複数ユーザー同時運用時のボトルネック |
+| 低 | Aivis 音声モデルの独自化 | 現状は研究開発用モデル（みさき / ひより）。実用化時は独自モデルを作成予定 |
+| 低 | ElevenLabs 切替の運用判断 | 聴感比較で ElevenLabs > Aivis（円滑さ）。Aivis Cloud の RPM 10 で本番運用が厳しい場合、Aivis セルフホストよりも ElevenLabs 主軸に倒す選択肢もあり |
 
 ## 9. 参考プロジェクト
 
@@ -183,9 +191,11 @@ mysql -u ai -p hinavi
 ### 2026-05-28: VOICEVOX(Sakura) → Aivis Cloud API へ差し替え
 
 **背景**: 音声品質向上のため、Sakura AI Engine の VOICEVOX を Aivis Cloud API へ置き換え。ElevenLabs は継続。
+実機での聴感比較で Aivis ≫ VOICEVOX を確認し、**VOICEVOX は廃止確定**。
+ElevenLabs vs Aivis は ElevenLabs の方が円滑だが、定額運用しやすい Aivis をデフォルトに採用。
 
 **変更点**:
-- `.env.local` に `AIVIS_CLOUD_API_TOKEN` を追加（Premium プラン、RPM 10）
+- `.env.local` に `AIVIS_CLOUD_API_TOKEN` を追加（Premium プラン定額、RPM 10）
 - `src/lib/characters.ts`: `voicevoxSpeakerId` を削除し `aivisModelUuid` に置換
   - みさき: `e9339137-2ae3-4d41-9394-fb757a7e61e6`
   - ひより: `734c12b6-eaf2-4dbd-8596-8663c72d2afa`
@@ -193,16 +203,18 @@ mysql -u ai -p hinavi
 - `src/app/api/tts/route.ts`: `synthesizeVoicevox` を削除し `synthesizeAivis` を実装
   - エンドポイント: `POST https://api.aivis-project.com/v1/tts/synthesize`
   - 認証: `Authorization: Bearer $AIVIS_CLOUD_API_TOKEN`
-  - リクエスト: `{model_uuid, text, output_format:"mp3", use_ssml:false}`
+  - リクエスト: `{model_uuid, text, output_format:"mp3", use_ssml:false, tempo_dynamics:1.5}`
+  - `tempo_dynamics:1.5` はデフォルト 1.0 では棒読み気味に聞こえたため抑揚を強める方向で固定
   - レスポンス: `audio/mpeg` をそのままクライアントへ返す（VOICEVOX 時代の audio_query → synthesis の2段呼び出しは不要に）
 - `src/lib/client/settings.ts`: engine 名を `voicevox` → `aivis` に変更、デフォルトも `aivis` に
 - `src/components/SettingsOverlay.tsx`: トグルラベルを「VOICEVOX」→「Aivis」へ
-- 旧 `SAKURA_AI_TOKEN` は `.env.local` に残置（未使用、ロールバック用に温存）
+- 旧 `SAKURA_AI_TOKEN` は `.env.local` から削除（VOICEVOX 廃止確定により不要）
 
 **注意点**:
 - Aivis Cloud は SSML を text に書くと解釈する仕様（デフォルト ON）。Gemini 生成テキストに記号が紛れる可能性があるので、念のため `use_ssml: false` で固定
 - VOICEVOX 互換と聞いていたが、実際は Aivis 独自の `/v1/tts/synthesize` 単一エンドポイント。互換性は内部の音声合成エンジン（AivisSpeech / VOICEVOX 系列）レベルの話で、API 形状は別物
 - 出力 MP3 は 192kbps / 44.1kHz / Mono（モデルデフォルト）
+- Premium プランは**定額**だが RPM 10 上限あり。複数ユーザー同時運用が必要になったらセルフホストへ移管
 
 ### 2026-05-26: 圏外時の会話ループ復帰問題を修正
 
