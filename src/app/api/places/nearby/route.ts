@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
+import { pool } from '@/lib/db';
+import { countTypes, fetchOsmNearby } from '@/lib/osm';
 import type { Spot } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
-const ENDPOINT = 'https://places.googleapis.com/v1/places:searchNearby';
+const PLACES_ENDPOINT = 'https://places.googleapis.com/v1/places:searchNearby';
+const OSM_RADIUS_M = 5000;
+const PLACES_RADIUS_M = 2000;
+const OSM_TIMEOUT_MS = 22_000;
+const PLACES_TIMEOUT_MS = 10_000;
 
-const INCLUDED_TYPES = [
+const PLACES_INCLUDED_TYPES = [
   'tourist_attraction',
   'historical_landmark',
   'museum',
@@ -25,7 +31,7 @@ const INCLUDED_TYPES = [
 interface ReqBody {
   lat?: number;
   lng?: number;
-  radius?: number;
+  sessionId?: string;
 }
 
 interface PlacesApiResponse {
@@ -36,6 +42,111 @@ interface PlacesApiResponse {
     types?: string[];
     primaryType?: string;
   }>;
+}
+
+async function fetchPlacesNearby(
+  lat: number,
+  lng: number,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<Spot[]> {
+  const res = await fetch(PLACES_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.location,places.types,places.primaryType',
+    },
+    body: JSON.stringify({
+      includedTypes: PLACES_INCLUDED_TYPES,
+      maxResultCount: 20,
+      locationRestriction: {
+        circle: {
+          center: { latitude: lat, longitude: lng },
+          radius: PLACES_RADIUS_M,
+        },
+      },
+      languageCode: 'ja',
+    }),
+    signal,
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`places ${res.status}: ${detail.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as PlacesApiResponse;
+  return (data.places ?? [])
+    .filter((p) => p.location && p.displayName?.text)
+    .map((p) => ({
+      id: p.id,
+      name: p.displayName!.text!,
+      lat: p.location!.latitude,
+      lng: p.location!.longitude,
+      types: p.types ?? [],
+      primaryType: p.primaryType,
+    }));
+}
+
+interface SourceResult {
+  ok: boolean;
+  spots: Spot[];
+  error: string | null;
+  ms: number;
+}
+
+async function runWithTimeout(
+  task: (signal: AbortSignal) => Promise<Spot[]>,
+  timeoutMs: number,
+): Promise<SourceResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const start = Date.now();
+  try {
+    const spots = await task(ctrl.signal);
+    return { ok: true, spots, error: null, ms: Date.now() - start };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, spots: [], error: msg.slice(0, 240), ms: Date.now() - start };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function logCompare(args: {
+  userId: number;
+  sessionId: string | null;
+  lat: number;
+  lng: number;
+  osm: SourceResult;
+  places: SourceResult;
+  usedSource: 'osm' | 'places' | 'none';
+}): Promise<void> {
+  try {
+    await pool.execute(
+      `INSERT INTO osm_places_compare
+       (user_id, session_id, request_lat, request_lng,
+        osm_count, places_count, osm_types, places_types,
+        osm_error, places_error, used_source, osm_ms, places_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        args.userId,
+        args.sessionId,
+        args.lat,
+        args.lng,
+        args.osm.spots.length,
+        args.places.spots.length,
+        JSON.stringify(countTypes(args.osm.spots)),
+        JSON.stringify(countTypes(args.places.spots)),
+        args.osm.error,
+        args.places.error,
+        args.usedSource,
+        args.osm.ms,
+        args.places.ms,
+      ],
+    );
+  } catch (err) {
+    console.error('osm_places_compare insert failed:', err);
+  }
 }
 
 export async function POST(req: Request) {
@@ -49,45 +160,36 @@ export async function POST(req: Request) {
   if (!body || typeof body.lat !== 'number' || typeof body.lng !== 'number') {
     return NextResponse.json({ error: 'lat/lng required' }, { status: 400 });
   }
-  const radius = Math.min(Math.max(body.radius ?? 2000, 100), 5000);
+  const sessionId = typeof body.sessionId === 'string' ? body.sessionId : null;
+  const { lat, lng } = body;
 
-  const res = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.location,places.types,places.primaryType',
-    },
-    body: JSON.stringify({
-      includedTypes: INCLUDED_TYPES,
-      maxResultCount: 20,
-      locationRestriction: {
-        circle: {
-          center: { latitude: body.lat, longitude: body.lng },
-          radius,
-        },
-      },
-      languageCode: 'ja',
-    }),
+  const [osm, places] = await Promise.all([
+    runWithTimeout((signal) => fetchOsmNearby(lat, lng, OSM_RADIUS_M, signal), OSM_TIMEOUT_MS),
+    runWithTimeout((signal) => fetchPlacesNearby(lat, lng, apiKey, signal), PLACES_TIMEOUT_MS),
+  ]);
+
+  const useOsm = osm.spots.length > 0;
+  const usedSource: 'osm' | 'places' | 'none' = useOsm
+    ? 'osm'
+    : places.spots.length > 0
+      ? 'places'
+      : 'none';
+  const spots = useOsm ? osm.spots : places.spots;
+
+  await logCompare({
+    userId: session.userId,
+    sessionId,
+    lat,
+    lng,
+    osm,
+    places,
+    usedSource,
   });
 
-  if (!res.ok) {
-    const detail = await res.text();
-    console.error('Places API error:', res.status, detail);
+  if (!useOsm && !places.ok && places.spots.length === 0) {
+    console.error('both osm and places failed:', { osm: osm.error, places: places.error });
     return NextResponse.json({ error: 'places lookup failed' }, { status: 502 });
   }
-
-  const data = (await res.json()) as PlacesApiResponse;
-  const spots: Spot[] = (data.places ?? [])
-    .filter((p) => p.location && p.displayName?.text)
-    .map((p) => ({
-      id: p.id,
-      name: p.displayName!.text!,
-      lat: p.location!.latitude,
-      lng: p.location!.longitude,
-      types: p.types ?? [],
-      primaryType: p.primaryType,
-    }));
 
   return NextResponse.json({ spots });
 }

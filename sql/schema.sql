@@ -31,3 +31,24 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 -- 既存環境向け（mode 後付け用。未適用なら手動実行）:
 -- ALTER TABLE conversations ADD COLUMN mode VARCHAR(16) DEFAULT NULL AFTER turn_no;
+
+CREATE TABLE IF NOT EXISTS osm_places_compare (
+  id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id       INT UNSIGNED NOT NULL,
+  session_id    VARCHAR(64) DEFAULT NULL,
+  request_lat   DECIMAL(10, 7) NOT NULL,
+  request_lng   DECIMAL(10, 7) NOT NULL,
+  osm_count     INT UNSIGNED NOT NULL DEFAULT 0,
+  places_count  INT UNSIGNED NOT NULL DEFAULT 0,
+  osm_types     TEXT DEFAULT NULL,
+  places_types  TEXT DEFAULT NULL,
+  osm_error     VARCHAR(255) DEFAULT NULL,
+  places_error  VARCHAR(255) DEFAULT NULL,
+  used_source   VARCHAR(16) NOT NULL,
+  osm_ms        INT UNSIGNED DEFAULT NULL,
+  places_ms     INT UNSIGNED DEFAULT NULL,
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_session (session_id),
+  INDEX idx_created (created_at),
+  CONSTRAINT fk_compare_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

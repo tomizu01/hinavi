@@ -7,7 +7,7 @@ const REFETCH_DISTANCE_M = 1500;
 const HISTORY_MAX = 5;
 const WAIT_BETWEEN_MS = 10_000;
 const TYPING_CHARS_PER_SEC = 7;
-const PLACES_TIMEOUT_MS = 12_000;
+const PLACES_TIMEOUT_MS = 30_000;
 const GENERATE_TIMEOUT_MS = 25_000;
 const OFFLINE_AFTER_FAILS = 2;
 
@@ -46,13 +46,13 @@ function computeMode(turnNo: number): ConversationMode {
   return 'spot';
 }
 
-async function fetchNearby(p: GeoPoint): Promise<Spot[]> {
+async function fetchNearby(p: GeoPoint, sessionId: string): Promise<Spot[]> {
   const res = await fetchWithTimeout(
     '/api/places/nearby',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat: p.lat, lng: p.lng, radius: 2000 }),
+      body: JSON.stringify({ lat: p.lat, lng: p.lng, sessionId }),
     },
     PLACES_TIMEOUT_MS,
   );
@@ -210,7 +210,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
       if (mode === 'spot') {
         try {
           if (!lastFetch || haversineMeters(pos, lastFetch.origin) >= REFETCH_DISTANCE_M) {
-            const spots = await fetchNearby(pos);
+            const spots = await fetchNearby(pos, sessionId);
             if (spots.length > 0) lastFetch = { spots, origin: pos };
             netFails = 0;
           }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
 import { CHARACTERS, type CharacterId } from '@/lib/characters';
+import { applyTtsReadings } from '@/lib/tts-readings';
 
 export const runtime = 'nodejs';
 
@@ -28,11 +29,12 @@ export async function POST(req: Request) {
   }
   const engine: TtsEngine = body.engine === 'elevenlabs' ? 'elevenlabs' : 'aivis';
   const character = CHARACTERS[body.character];
+  const spokenText = applyTtsReadings(body.text);
 
   if (engine === 'elevenlabs') {
-    return synthesizeElevenLabs(body.text, character.elevenLabsVoiceId);
+    return synthesizeElevenLabs(spokenText, character.elevenLabsVoiceId);
   }
-  return synthesizeAivis(body.text, character.aivisModelUuid);
+  return synthesizeAivis(spokenText, character.aivisModelUuid);
 }
 
 async function synthesizeAivis(text: string, modelUuid: string) {

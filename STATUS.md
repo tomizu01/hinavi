@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-06-01（第2回耐久テストに向けた改修計画を §12 に追加）
+最終更新: 2026-06-01（第2回耐久テストに向けた §12 改修計画を Phase A/B/C すべて実装・本番反映済み）
 
 ## 1. 概要
 
@@ -20,17 +20,20 @@
 /var/www/hinavi/
 ├── REQUIREMENTS.md            要件定義
 ├── STATUS.md                  このファイル
-├── package.json               next 16.2.3 / react 19 / mysql2 / iron-session / bcryptjs / @googlemaps/js-api-loader
+├── package.json               next 16.2.3 / react 19 / mysql2 / iron-session / bcryptjs / leaflet
 ├── next.config.ts
 ├── tsconfig.json
 ├── .env.local                 機密(DB/API キー類) — git管理外
-├── sql/schema.sql             users, conversations テーブル
+├── sql/schema.sql             users / conversations / osm_places_compare テーブル
 ├── scripts/create-user.mjs    bcrypt ユーザー作成スクリプト
-├── prompts/characters/
-│   ├── misaki1.md             案内役 みさき・奇数ターン用 (Aivis model e9339137... / ElevenLabs ugYcuAusTuWCSOpJD0Xd)
-│   ├── misaki2.md             案内役 みさき・偶数ターン用
-│   ├── hiyori1.md             盛り上げ役 ひより・奇数ターン用 (Aivis model 734c12b6... / ElevenLabs OSwaPSNdfituxkWcjlkR)
-│   └── hiyori2.md             盛り上げ役 ひより・偶数ターン用
+├── prompts/
+│   ├── characters/
+│   │   ├── misaki.md          案内役 みさき・キャラ設定 (Aivis model e9339137... / ElevenLabs ugYcuAusTuWCSOpJD0Xd)
+│   │   └── hiyori.md          盛り上げ役 ひより・キャラ設定 (Aivis model 734c12b6... / ElevenLabs OSwaPSNdfituxkWcjlkR)
+│   └── kaiwa/
+│       ├── kaiwa1.md          スポットモード用シーン指示
+│       ├── kaiwa2.md          休憩モード用シーン指示（6 ターン毎）
+│       └── kaiwa3.md          時間モード用シーン指示（30 ターン毎）
 ├── public/
 │   ├── manifest.webmanifest
 │   ├── sw.js                  Service Worker (本番でのみ登録)
@@ -42,27 +45,29 @@
     ├── app/
     │   ├── layout.tsx
     │   ├── globals.css        Tailwind v4
-    │   ├── page.tsx           メイン画面 (開始 → 地図+会話)
+    │   ├── page.tsx           メイン画面 (MapView を next/dynamic で SSR 無効化して読込)
     │   ├── login/page.tsx     ログインフォーム
     │   └── api/
     │       ├── auth/login/route.ts
     │       ├── auth/logout/route.ts
-    │       ├── places/nearby/route.ts   Google Places API (New)
-    │       ├── generate/route.ts        Gemini 3.5 Flash
-    │       └── tts/route.ts             Aivis Cloud / ElevenLabs を engine で分岐
+    │       ├── places/nearby/route.ts   OSM (Overpass) 5km → 0件なら Google Places 2km フォールバック、両者を osm_places_compare に記録
+    │       ├── generate/route.ts        Gemini 3.1 Flash Lite + responseSchema で {misaki, hiyori} JSON 出力
+    │       └── tts/route.ts             Aivis / ElevenLabs 分岐。送信直前に tts-readings の置換を適用
     ├── components/
-    │   ├── MapView.tsx          Google Maps JavaScript API + 現在地追従
+    │   ├── MapView.tsx          Leaflet + 地理院タイル(pale) + 現在地 circleMarker
     │   ├── SpeechRow.tsx        キャラ画像 + セリフバブル
     │   ├── SettingsOverlay.tsx  地図右上の歯車ボタン+設定ポップアップ(TTS切替/ログアウト)
     │   └── SwRegister.tsx       Service Worker 登録
     └── lib/
         ├── db.ts              mysql2 connection pool
         ├── session.ts         iron-session 設定
-        ├── characters.ts      みさき/ひより の定義 (aivisModelUuid, elevenLabsVoiceId)
-        ├── prompts.ts         md ファイルを起動時にメモリキャッシュ
-        ├── types.ts
+        ├── characters.ts      みさき/ひより の定義 (aivisModelUuid, elevenLabsVoiceId, promptPath)
+        ├── prompts.ts         loadCharacterPrompt / loadKaiwaPrompt（ファイル単位メモリキャッシュ）
+        ├── osm.ts             Overpass API クライアント。観光・歴史・飲食・公園系を取得、最大100件サンプル
+        ├── tts-readings.ts    TTS 読み間違い対策の強制置換辞書（送信直前に適用、画面表示は無変更）
+        ├── types.ts           ConversationMode = 'spot' | 'rest' | 'time' などを定義
         └── client/
-            ├── conversationLoop.ts   1〜14ステップの会話ループ
+            ├── conversationLoop.ts   モード判定→2話者1コール→順次再生 のループ
             ├── geo.ts                haversine
             ├── settings.ts           TTSエンジン選択を localStorage に永続化
             ├── tts.ts                クライアント側 TTS 再生
@@ -73,13 +78,16 @@
 
 | サービス | キー所在 | プロジェクト共有元 |
 |---|---|---|
-| Google Maps Platform (Maps JS / Places API New) | `.env.local` `GOOGLE_PLACES_API_KEY` / `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | `/var/www/aicyc/.env.local` |
-| Gemini API (`gemini-3.5-flash`) | `.env.local` `GEMINI_API_KEY` | `/var/www/aicyc/.env.local` |
+| Google Places API (New, Nearby Search) | `.env.local` `GOOGLE_PLACES_API_KEY` | `/var/www/aicyc/.env.local` |
+| 地理院タイル (`https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png`) | キー不要、規約に基づく帰属表示のみ必要 | — |
+| OSM Overpass API (`https://overpass-api.de/api/interpreter`) | キー不要、User-Agent 設定済 | — |
+| Gemini API (デフォルト `gemini-3.1-flash-lite`、env `GEMINI_MODEL` で上書き可) | `.env.local` `GEMINI_API_KEY` | `/var/www/aicyc/.env.local` |
 | Aivis Cloud API (`POST /v1/tts/synthesize`, Premium プラン定額, RPM 10) | `.env.local` `AIVIS_CLOUD_API_TOKEN` | hinavi 専用に発行 |
 | ElevenLabs TTS (`eleven_v3`, `mp3_44100_64`, Proプラン契約済) | `.env.local` `ELEVENLABS_API_KEY` | `/var/www/aicyc/.env.local` |
 | MySQL | `.env.local` (host=localhost, db=hinavi, user=ai) | `/var/www/kpi/config/database.php` |
 
-**Gemini 3.x 系は推論モデル**: `thinkingConfig: { thinkingLevel: 'low' }` で思考レベルを調整。`maxOutputTokens` は思考トークン込みなので 4096 確保している（`src/app/api/generate/route.ts`）。
+**Gemini 3.x 系は推論モデル**: `thinkingConfig: { thinkingLevel: 'low' }` で思考レベルを調整。2話者1コール化に合わせ `maxOutputTokens: 1024`（不足時は段階的に増やす）。`responseSchema` で `{misaki, hiyori}` JSON 形式を強制。
+**`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`**: 2026-06-01 に Leaflet + 地理院タイル化したため未参照。`.env.local` に残置されているが削除可。
 
 ## 5. 初期アカウント
 
@@ -127,17 +135,30 @@ mysql -u ai -p hinavi
 ## 7. 仕様メモ（実装上のキモ）
 
 - **会話ループ**: `src/lib/client/conversationLoop.ts` の `startConversationLoop()` がエントリ
-  - ターン定義: みさき → ひより の往復1組 = 1ターン（`turnNo` は spot 1個ぶんで +1、両話者に同じ番号で渡る）
-  - 各発話後 10 秒ウェイト
-  - GPS 500m 移動毎に Places 再取得
-  - 履歴は 1時間以内かつ直近10件まで Gemini に渡す
-- **プロンプト構成（奇数/偶数で切替）**: `src/app/api/generate/route.ts`
-  - **奇数ターン (variant=1)**: `{misaki,hiyori}1.md` を使用。「キャラ設定 + スポット情報 + 会話履歴 + 次の発話指示」
-  - **偶数ターン (variant=2)**: `{misaki,hiyori}2.md` を使用。スポット情報を省略し「キャラ設定 + 会話履歴 + 次の発話指示」のみ
-  - 判定: `body.turnNo % 2 === 0 ? 2 : 1`（未指定時は variant=1 フォールバック）
-- **ユーザー呼称**: `prompts/characters/*.md` 内の `{user_name}` を `users.display_name` で置換（NULL/空時は `'あなた'` フォールバック）。プロンプト側は `{user_name}さん` の形式で運用。
+  - ターン定義: みさき・ひより が 1回ずつ発言する 1往復 = 1ターン（`turnNo` は両話者に同じ番号で渡る）
+  - **モード判定**（優先度: 時間 > 休憩 > スポット）:
+    - `turnNo % 30 === 0` → 時間モード（kaiwa3.md、サーバで JST 現在時刻を注入）
+    - `turnNo % 6 === 0` → 休憩モード（kaiwa2.md）
+    - それ以外 → スポットモード（kaiwa1.md）
+  - **再フェッチ**: GPS 1.5km 移動毎に Places/OSM 再取得（スポットモード時のみ）
+  - **スポット継続**: 同一スポットで最低 2 ターン継続。継続時はプロンプトに「会話継続中」、切替時は「スポット変更」の注意書きを注入
+  - **履歴**: 直近 5 件を Gemini に渡す
+  - **各発話後 10 秒ウェイト**
+- **生成エンドポイント**: `src/app/api/generate/route.ts`
+  - リクエスト: `{ mode, turnNo, sessionId, history, spot?, isSpotContinuation? }`
+  - 1コールで `{ misaki: string, hiyori: string }` の JSON を取得（`responseMimeType: application/json` + `responseSchema`）
+  - プロンプト構成: `[misaki.md, hiyori.md, kaiwa<N>.md, モード別コンテキスト, 履歴, 出力指示]`
+  - **失敗時**: HTTP/タイムアウト/JSON 不正のいずれも 1 回リトライ。2 回失敗で 502
+  - 各ターン 2 行（misaki, hiyori）を `conversations` テーブルに `mode` 付きで保存
+- **ユーザー呼称**: `prompts/**/*.md` 内の `{user_name}` を `users.display_name` で置換（NULL/空時は `'あなた'` フォールバック）。現状の `misaki.md` / `hiyori.md` / `kaiwa*.md` に placeholder は無いが、機能は維持
+- **スポット取得**: `src/app/api/places/nearby/route.ts`
+  - OSM (Overpass) 5km と Google Places 2km を並列コール
+  - OSM ヒットが 1 件以上ならそれを使用、0 件のとき Places にフォールバック
+  - 両結果（件数・種別分布・所要 ms・エラー・使用ソース）を `osm_places_compare` テーブルへログ
+  - OSM は urban で数千件返るため、サーバ側で 100 件にランダムサンプル
 - **画面構成**:
-  - 地図に「一時停止」ボタンを左上オーバーレイ
+  - 地図: Leaflet + 地理院タイル(pale)。現在地は緑の circleMarker。右下に「地理院タイル」帰属表示
+  - 地図上に「一時停止」ボタンを左上、設定（歯車）ボタンを右上にオーバーレイ（**`z-[1100]`**: Leaflet pane は z-index 1000 以下なので必ずこれを超えること）
   - 下半分にキャラ会話（みさきは画像右・セリフ左、ひよりは画像左・セリフ右）
   - セリフは `text-xs`、タイプライター表示 7文字/秒
 - **TTS**: 直前再生終了後に即次へ。ループ側の 10 秒ウェイトのみが間隔制御
@@ -148,12 +169,15 @@ mysql -u ai -p hinavi
   - ElevenLabs パラメータは `docs/elevenlabs-tts-api.md` の推奨値 (stability=1.0, similarity_boost=0.75, style=0.0, eleven_v3, ja)
   - 切替UI: 地図右上の歯車ボタン → ポップアップ(`SettingsOverlay`)で Aivis/ElevenLabs トグル。同ポップアップに LOGOUT ボタンも配置
   - Aivis Cloud のレート制限: Premium プラン**定額**で RPM 10。開発中は同時利用しない前提。本番は自前サーバ（AivisSpeech Engine セルフホスト）への移管を検討
+- **TTS 読み間違い対策**: `src/lib/tts-readings.ts` の `TTS_READING_OVERRIDES` に `[元の表記, 読み]` の組を列挙。TTS API 送信直前に置換（画面表示は元のまま）。順序が効くので長い語を先に書く
 - **オフライン検知（2段構え）**:
   1. **明示的 offline**: `navigator.onLine === false` を検知
-  2. **暗黙的 offline（ハング検知）**: `navigator.onLine` は不正確で有名（接続性ではなくインターフェース有無しか見ない）なため、`/api/{places/nearby,generate,tts}` の各 fetch にタイムアウト（places=12s / generate=25s / tts=20s）を `AbortController` で設定。2回連続失敗で `OFFLINE_AFTER_FAILS = 2` 経由で圏外ブランチへ強制分岐
+  2. **暗黙的 offline（ハング検知）**: `navigator.onLine` は不正確で有名（接続性ではなくインターフェース有無しか見ない）なため、`/api/{places/nearby,generate,tts}` の各 fetch にタイムアウト（places=30s / generate=25s / tts=20s）を `AbortController` で設定。2回連続失敗で `OFFLINE_AFTER_FAILS = 2` 経由で圏外ブランチへ強制分岐
+  - places タイムアウトを 30s に拡大したのは Overpass のレスポンス時間変動を吸収するため
   - 圏外時は「ここは圏外のようです」とセリフ欄に表示し5秒ループ
   - 圏内復帰: 5秒wait明けに再度 `fetchNearby` を試行 → 成功で `netFails = 0` リセット → 通常運行復帰（復帰検知ラグ目安: 5〜30秒）
   - 音声フォールバック (`/audio/offline_notice.wav`) は SW プリキャッシュ済だが、再生処理は未実装
+  - 地図のオフライン挙動: Leaflet コンテナは常時マウント、`online === false` 時に半透明オーバーレイを上に重ねるだけ。Map インスタンスは破棄しないので復帰時のリセット不要
 
 ## 8. 既知の TODO / 改善候補
 
@@ -161,19 +185,16 @@ mysql -u ai -p hinavi
 |---|---|---|
 | 高 | プロセス常駐 | systemd unit 化（現在 `nohup &`、サーバ再起動で死ぬ） |
 | 高 | 初期パスワード変更 | `ChangeMe123!` のまま運用しない |
-| 中 | 会話の単調さ解消 | 奇数/偶数の2拍子サイクルになりがち。改善案 A=`turnNo % 4` で4種variant化 / B=ランダム or 話者ずらし / C=`*2.md` 側に「直前と同じ切り口を避ける」「N発話に1度ユーザー呼びかけ」等の制約を追加。低コストはC。 |
-| 中 | Google Maps API キー制限 | HTTPリファラを `hinavi.mediowl.ai/*` に絞る／API スコープを限定 |
+| 中 | Google Places API キー制限 | HTTPリファラ／API スコープを `hinavi.mediowl.ai/*` 相当に絞る（OSM フォールバック用に Places はまだ使用するため） |
 | 中 | ALB ヘルスチェック設定 | `GET /login` (200) を使用すれば良い |
 | 中 | 圏外フォールバック音声 | SW プリキャッシュ対象には入っているが `/audio/offline_notice.wav` ファイル自体が未配置。配置 + クライアント側の再生処理（`onOfflineNotice` 経路）を追加 |
 | 中 | 圏外復帰の早期検知 | 現状ハング検知は2連続失敗（最悪 ~30秒）。軽量ping (`/api/health` を追加して `HEAD` 等) を圏外ブランチ内で叩き、復帰を秒単位で検知することも可能 |
-| 低 | ログのローテーション | `/var/log/hinavi/` に永続化済（2026-05-28）。長期運用するなら logrotate 設定追加を検討 |
-| 低 | 観光的でない `primaryType` のフィルタ | 現状 Places の `includedTypes` で絞っているが、`department_store` や `hotel` も入ってくる。会話に向くものを `primaryType` でさらに絞る |
-| 低 | 会話履歴の整理 UI | `conversations` テーブルは溜まる一方なので、簡易ダッシュボードがあると便利 |
-| 低 | iOS/Safari 対応 | 仕様上スコープ外だが、Wake Lock 以外は動く可能性あり |
 | 中 | Aivis Cloud 本番運用検討 | 本番は自前サーバ（AivisSpeech Engine セルフホスト）への移管予定。Cloud は Premium 定額だが RPM 10 上限が複数ユーザー同時運用時のボトルネック |
-| 中 | Places API の二段構え化 | 複数ユーザー展開時の Nearby Search (Pro) 課金抑制目的。1段目を OSM (Overpass API) + Wikipedia/Wikidata に置き、ヒット薄い時のみ Places にフォールバック。景観/歴史話は無料側で完結、飲食レコメンドだけ Places に寄せる想定。Overpass 公開エンドポイントのレート制限と田舎の POI 密度不足が要検証。**次回耐久テスト時の検証項目**: `/api/places/nearby` 内で OSM/Places 両方コールしてレスポンスをログ出力（DB 保存 or サーバログ）→ 同経路における OSM カバレッジ実測（POI 密度、ヒット率、種別偏り）。検証フェーズではユーザー向けには Places の結果のみを返却し、OSM 側はログ専用に走らせる |
-| 中 | 地図を Google Maps → 地理院タイル化 | 走行中の地図閲覧優先度は低いため、Maps JavaScript API の従量課金を切る。Leaflet + 地理院タイル (`https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png`) に差し替え、`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` 依存も解消。要件: 「地理院タイル」帰属表示を地図右下に常時表示。規模拡大時（月数十万アクセス超）は国土地理院への届出が必要 |
-| 中 | Gemini コスト削減（複合施策） | 16hr 耐久で ¥1,100 程度発生。ユーザー割り込みが無い前提を活かして以下を組み合わせる: ① **2話者1コール化**: `/api/generate` を `{misaki, hiyori}` の JSON 構造化出力に変更（`responseSchema` 利用）。conversationLoop は `generatePair()` → 順次再生に。入力 token 50%減 + 会話の繋がりも向上 / ② **モデル lite 化**: `gemini-3.5-flash` → `gemini-3-flash-lite` 等（雑談に推論モデルは過剰、単価 1/3〜1/5） / ③ **履歴を 10 → 5 件**（`conversationLoop.ts` `HISTORY_MAX`） / ④ **`maxOutputTokens: 4096 → 1024`** / ⑤ **Gemini Context Caching**（キャラプロンプト固定部の明示キャッシュ）。①②③④まとめると ¥1,100 → ¥150 オーダーまで落とせる試算。実装は generate ルート + conversationLoop の2ファイル改修。失敗時は2コール方式へフォールバック実装すること |
+| 中 | Gemini Context Caching の検証 | §12.5 ⑤ として保留。Gemini の最小キャッシュサイズ（4k〜32k tok）を本プロジェクトの prompt 規模で満たせるか検証。満たせない場合は諦め |
+| 低 | ログのローテーション | `/var/log/hinavi/` に永続化済（2026-05-28）。長期運用するなら logrotate 設定追加を検討 |
+| 低 | 観光的でない `primaryType` のフィルタ | OSM フォールバックの Places で `department_store` や `hotel` が混じることがある。会話に向くものを `primaryType` でさらに絞る |
+| 低 | 会話履歴／比較ログの整理 UI | `conversations`（mode 別ターン分布）と `osm_places_compare`（カバレッジ）の簡易ダッシュボードがあると便利 |
+| 低 | iOS/Safari 対応 | 仕様上スコープ外だが、Wake Lock 以外は動く可能性あり |
 | 低 | Aivis 音声モデルの独自化 | 現状は研究開発用モデル（みさき / ひより）。実用化時は独自モデルを作成予定 |
 | 低 | ElevenLabs 切替の運用判断 | 聴感比較で ElevenLabs > Aivis（円滑さ）。Aivis Cloud の RPM 10 で本番運用が厳しい場合、Aivis セルフホストよりも ElevenLabs 主軸に倒す選択肢もあり |
 
@@ -190,6 +211,45 @@ mysql -u ai -p hinavi
 - DNS: `hinavi.mediowl.ai` → ALB
 
 ## 11. 直近の作業ログ
+
+### 2026-06-01: 第2回耐久テストに向けた §12 改修一括実装
+
+第1回耐久テスト（16hr）の所見を受けた改修計画 §12 を Phase A/B/C すべて実装・本番反映。
+
+**Phase A — 地図差し替え**
+- 圏外時の地図ブラックアウト修正（`MapView.tsx` をコンテナ常時マウント + オフライン半透明オーバーレイ方式へ）
+- Google Maps JS API → Leaflet + 地理院タイル(pale) に全面差し替え。`@googlemaps/js-api-loader` 撤去、`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` 未参照化
+- マーカーは default icon ではなく `circleMarker`（緑塗 + 白縁）でアイコンパス問題回避
+- `MapView` を `next/dynamic({ ssr: false })` で読み込み（Leaflet が SSR で `window` 参照のため）
+- 一時停止／歯車ボタンの `z-index` を `z-10` → `z-[1100]` に修正（Leaflet pane が z-index 1000 まで使うため）
+
+**Phase B — 会話コア再構築**
+- プロンプト構造を 2 層化: `prompts/characters/{misaki,hiyori}.md`（共通キャラ設定） + `prompts/kaiwa/kaiwa{1,2,3}.md`（シーン別指示）。旧 `{misaki,hiyori}{1,2}.md` 4 ファイルを削除
+- 会話ループを 3 モード化: `turnNo % 30` 時間 > `turnNo % 6` 休憩 > その他スポット
+- `/api/generate` を 2話者 1コール化。`responseSchema` で `{misaki, hiyori}` JSON 出力を強制。HTTP / JSON パース失敗時は 1 回リトライ
+- 履歴 10 → 5 件、`maxOutputTokens` 4096 → 1024、Gemini モデル `gemini-3.5-flash` → `gemini-3.1-flash-lite`（`.env.local` の `GEMINI_MODEL` で上書き可）
+- 時間モードはサーバ側で `Intl.DateTimeFormat` の JST 現在時刻をプロンプトに注入
+- スポットモードは「会話継続中」「スポット変更」の注意書きを `isSpotContinuation` フラグから自動注入
+
+**Phase C — Places API 二段構え化 + 比較ロギング**
+- `src/lib/osm.ts` 新規。Overpass API クライアント（観光・歴史・飲食・公園系の `nwr` クエリ、5km）。`name`/`name:ja` 付きのみ採用、重複除去、最大 100 件ランダムサンプル
+- `/api/places/nearby` を OSM 5km + Places 2km の **並列コール**に改修。OSM 1件以上で OSM 使用、0件なら Places フォールバック
+- `osm_places_compare` テーブル新設。検証期間中は両 API のレスポンス（件数・種別分布・所要 ms・エラー・使用ソース）を毎回記録
+- 再フェッチ閾値 500m → **1.5km**、スポット毎に**最低 2 ターン継続**
+
+**その他**
+- `src/lib/tts-readings.ts` 新規。TTS 読み間違い対策の強制置換辞書（送信直前に適用、画面表示は無変更）。`辛い→からい` `お腹→おなか` `何を/何に/何が` `街中→まちなか` を初期登録
+- `conversations` テーブルに `mode` カラム追加。同一ターンの 2 行（misaki, hiyori）にモードが入る
+- `package.json` から `@googlemaps/js-api-loader` 削除、`leaflet` / `@types/leaflet` 追加
+
+**コスト目標**: 30hr 連続走行で総額 ¥980 / AI ¥450 以下。試算では AI ¥280〜400 着地見込み（実測は次回耐久テスト後）
+
+**実機確認状況**
+- ✅ ビルド + 本番反映完了
+- ✅ Gemini 3.1 Flash Lite + responseSchema の JSON 出力動作確認（直接コールで `{misaki, hiyori}` 取得）
+- ✅ Overpass 5km @ 清水寺周辺で 5,810 POI / 7.5s
+- ✅ 休憩ターン（turnNo=6）の実機動作確認
+- ⏳ 時間モード（turnNo=30）、TTS 読み替え、OSM/Places 比較ログ集計、Lite モデルの長時間品質は次回耐久テストで検証
 
 ### 2026-05-28: VOICEVOX(Sakura) → Aivis Cloud API へ差し替え
 
@@ -281,9 +341,10 @@ ElevenLabs vs Aivis は ElevenLabs の方が円滑だが、定額運用しやす
 - TTS は ElevenLabs の方が品質が良いと確認済。ただしデフォルトは `voicevox` のまま（ハルシネーション/コスト懸念のフォールバック維持）。常用したい場合は §8 に「デフォルトを elevenlabs に切替」のTODOを追加する判断もあり。
 - ElevenLabs ハルシネーション対策の追加防御余地: `playSpeechAudio` のタイムアウト 30秒 → セリフ長×係数の動的算出に変える等。現状暴走報告は無い。
 
-## 12. 第2回フィールド耐久テストに向けた改修計画
+## 12. 第2回フィールド耐久テストに向けた改修計画 [2026-06-01 全項目実装完了 / 実機検証は次回耐久テスト]
 
 策定日: 2026-06-01。第1回耐久テスト（16hr）の所見を踏まえた決定版計画。
+**実装ステータス**: §12.1 / §12.2 / §12.3 / §12.4 / §12.5 / §12.6 / §12.7 すべて本番反映済み。残りは実機での品質検証のみ。
 
 ### 12.0 第1回耐久テストの所見
 
