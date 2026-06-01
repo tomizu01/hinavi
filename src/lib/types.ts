@@ -1,5 +1,7 @@
 import type { CharacterId } from './characters';
 
+export type ConversationMode = 'spot' | 'rest' | 'time';
+
 export interface Spot {
   id: string;
   name: string;
@@ -17,11 +19,15 @@ export interface ConversationLine {
 }
 
 export interface GenerateRequest {
-  speaker: CharacterId;
-  spot: Spot;
+  mode: ConversationMode;
+  turnNo: number;
+  sessionId: string;
   history: ConversationLine[];
+  spot?: Spot;
+  isSpotContinuation?: boolean;
 }
 
 export interface GenerateResponse {
-  text: string;
+  misaki: string;
+  hiyori: string;
 }

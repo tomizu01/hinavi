@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   user_id      INT UNSIGNED NOT NULL,
   session_id   VARCHAR(64) NOT NULL,
   turn_no      INT UNSIGNED NOT NULL,
+  mode         VARCHAR(16) DEFAULT NULL,
   speaker      VARCHAR(32) NOT NULL,
   spot_name    VARCHAR(255) DEFAULT NULL,
   spot_lat     DECIMAL(10, 7) DEFAULT NULL,
@@ -27,3 +28,6 @@ CREATE TABLE IF NOT EXISTS conversations (
   INDEX idx_session (session_id),
   CONSTRAINT fk_conv_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 既存環境向け（mode 後付け用。未適用なら手動実行）:
+-- ALTER TABLE conversations ADD COLUMN mode VARCHAR(16) DEFAULT NULL AFTER turn_no;

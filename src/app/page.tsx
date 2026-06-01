@@ -142,7 +142,7 @@ export default function MainPage() {
         <MapView position={position} online={online} />
         <button
           onClick={handlePauseToggle}
-          className={`absolute top-2 left-2 z-10 px-4 py-2 rounded-full text-sm font-medium shadow-lg backdrop-blur-sm ${paused ? 'bg-emerald-600/90 hover:bg-emerald-500' : 'bg-neutral-800/80 hover:bg-neutral-700'} text-white`}
+          className={`absolute top-2 left-2 z-[1100] px-4 py-2 rounded-full text-sm font-medium shadow-lg backdrop-blur-sm ${paused ? 'bg-emerald-600/90 hover:bg-emerald-500' : 'bg-neutral-800/80 hover:bg-neutral-700'} text-white`}
         >
           {paused ? '再開' : '一時停止'}
         </button>

@@ -53,7 +53,7 @@ export default function MapView({ position, online }: Props) {
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
       {!online && (
-        <div className="absolute inset-0 flex items-center justify-center bg-neutral-800/70 text-neutral-100 pointer-events-none z-[1000]">
+        <div className="absolute inset-0 flex items-center justify-center bg-neutral-800/70 text-neutral-100 pointer-events-none z-[1050]">
           圏外
         </div>
       )}

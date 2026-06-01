@@ -1,17 +1,19 @@
 import type { CharacterId } from '@/lib/characters';
-import { TURN_ORDER } from '@/lib/characters';
-import type { ConversationLine, Spot } from '@/lib/types';
+import type { ConversationLine, ConversationMode, GenerateResponse, Spot } from '@/lib/types';
 import { haversineMeters, type GeoPoint } from './geo';
 import { fetchSpeechAudio, fetchWithTimeout, loadAudio, playSpeechAudio, stopSpeech } from './tts';
 
-const REFETCH_DISTANCE_M = 500;
-const HISTORY_HOURS = 1;
-const HISTORY_MAX = 10;
+const REFETCH_DISTANCE_M = 1500;
+const HISTORY_MAX = 5;
 const WAIT_BETWEEN_MS = 10_000;
 const TYPING_CHARS_PER_SEC = 7;
 const PLACES_TIMEOUT_MS = 12_000;
 const GENERATE_TIMEOUT_MS = 25_000;
 const OFFLINE_AFTER_FAILS = 2;
+
+const MIN_TURNS_PER_SPOT = 2;
+const REST_INTERVAL = 6;
+const TIME_INTERVAL = 30;
 
 export interface LoopCallbacks {
   getPosition: () => GeoPoint | null;
@@ -19,7 +21,7 @@ export interface LoopCallbacks {
   isOnline: () => boolean;
   onSpeakStart: (speaker: CharacterId) => void;
   onTextProgress: (speaker: CharacterId, text: string) => void;
-  onSpeakEnd: (speaker: CharacterId, fullText: string, spot: Spot) => void;
+  onSpeakEnd: (speaker: CharacterId, fullText: string, spot: Spot | null) => void;
   onSpotChange: (spot: Spot) => void;
   onOfflineNotice: () => Promise<void>;
 }
@@ -27,6 +29,21 @@ export interface LoopCallbacks {
 interface FetchResult {
   spots: Spot[];
   origin: GeoPoint;
+}
+
+interface GenerateBody {
+  mode: ConversationMode;
+  turnNo: number;
+  sessionId: string;
+  history: ConversationLine[];
+  spot?: Spot;
+  isSpotContinuation?: boolean;
+}
+
+function computeMode(turnNo: number): ConversationMode {
+  if (turnNo % TIME_INTERVAL === 0) return 'time';
+  if (turnNo % REST_INTERVAL === 0) return 'rest';
+  return 'spot';
 }
 
 async function fetchNearby(p: GeoPoint): Promise<Spot[]> {
@@ -44,30 +61,26 @@ async function fetchNearby(p: GeoPoint): Promise<Spot[]> {
   return data.spots ?? [];
 }
 
-async function generate(
-  speaker: CharacterId,
-  spot: Spot,
-  history: ConversationLine[],
-  sessionId: string,
-  turnNo: number,
-): Promise<string> {
+async function generatePair(body: GenerateBody): Promise<GenerateResponse> {
   const res = await fetchWithTimeout(
     '/api/generate',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speaker, spot, history, sessionId, turnNo }),
+      body: JSON.stringify(body),
     },
     GENERATE_TIMEOUT_MS,
   );
   if (!res.ok) throw new Error(`generate ${res.status}`);
-  const data = (await res.json()) as { text: string };
-  return data.text;
+  const data = (await res.json()) as GenerateResponse;
+  if (typeof data.misaki !== 'string' || typeof data.hiyori !== 'string') {
+    throw new Error('generate: malformed response');
+  }
+  return data;
 }
 
 function filterHistory(history: ConversationLine[]): ConversationLine[] {
-  const cutoff = Date.now() - HISTORY_HOURS * 60 * 60 * 1000;
-  return history.filter((h) => h.createdAt >= cutoff).slice(-HISTORY_MAX);
+  return history.slice(-HISTORY_MAX);
 }
 
 function pickSpot(spots: Spot[], previous: Spot | null): Spot | null {
@@ -162,6 +175,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
 
   let lastFetch: FetchResult | null = null;
   let currentSpot: Spot | null = null;
+  let spotTurnCount = 0;
   const history: ConversationLine[] = [];
   let turnNo = 0;
   let netFails = 0;
@@ -186,52 +200,81 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         continue;
       }
 
-      // Step 2: fetch nearby spots
-      try {
-        if (!lastFetch || haversineMeters(pos, lastFetch.origin) >= REFETCH_DISTANCE_M) {
-          const spots = await fetchNearby(pos);
-          if (spots.length > 0) lastFetch = { spots, origin: pos };
-          netFails = 0;
+      const nextTurnNo = turnNo + 1;
+      const mode = computeMode(nextTurnNo);
+
+      let spotForTurn: Spot | undefined;
+      let isSpotContinuation = false;
+      let nextSpotTurnCount = spotTurnCount;
+
+      if (mode === 'spot') {
+        try {
+          if (!lastFetch || haversineMeters(pos, lastFetch.origin) >= REFETCH_DISTANCE_M) {
+            const spots = await fetchNearby(pos);
+            if (spots.length > 0) lastFetch = { spots, origin: pos };
+            netFails = 0;
+          }
+        } catch (err) {
+          console.error('places fetch failed:', err);
+          netFails += 1;
+          continue;
         }
+        if (!lastFetch || lastFetch.spots.length === 0) {
+          await wait(3000, abortSignal);
+          continue;
+        }
+
+        if (currentSpot && spotTurnCount < MIN_TURNS_PER_SPOT) {
+          spotForTurn = currentSpot;
+          isSpotContinuation = true;
+          nextSpotTurnCount = spotTurnCount + 1;
+        } else {
+          const picked = pickSpot(lastFetch.spots, currentSpot);
+          if (!picked) {
+            await wait(2000, abortSignal);
+            continue;
+          }
+          spotForTurn = picked;
+          isSpotContinuation = currentSpot?.id === picked.id;
+          nextSpotTurnCount = isSpotContinuation ? spotTurnCount + 1 : 1;
+        }
+      }
+
+      turnNo = nextTurnNo;
+      if (spotForTurn) {
+        currentSpot = spotForTurn;
+        spotTurnCount = nextSpotTurnCount;
+        cb.onSpotChange(spotForTurn);
+      }
+
+      let pair: GenerateResponse;
+      try {
+        pair = await generatePair({
+          mode,
+          turnNo,
+          sessionId,
+          history: filterHistory(history),
+          spot: spotForTurn,
+          isSpotContinuation,
+        });
+        netFails = 0;
       } catch (err) {
-        console.error('places fetch failed:', err);
+        console.error('generate failed:', err);
         netFails += 1;
         continue;
       }
-      if (!lastFetch || lastFetch.spots.length === 0) {
-        await wait(3000, abortSignal);
-        continue;
-      }
-
-      // Step 3: choose target spot
-      currentSpot = pickSpot(lastFetch.spots, currentSpot);
-      if (!currentSpot) {
-        await wait(2000, abortSignal);
-        continue;
-      }
-      cb.onSpotChange(currentSpot);
-      turnNo += 1;
 
       let bailToOffline = false;
-      for (const speaker of TURN_ORDER) {
+      const lines: Array<{ speaker: CharacterId; text: string }> = [
+        { speaker: 'misaki', text: pair.misaki },
+        { speaker: 'hiyori', text: pair.hiyori },
+      ];
+
+      for (const { speaker, text } of lines) {
         if (abortSignal.aborted) return;
         while (cb.isPaused() && !abortSignal.aborted) await wait(500, abortSignal);
         if (abortSignal.aborted) return;
 
-        let text: string;
-        try {
-          text = await generate(speaker, currentSpot, filterHistory(history), sessionId, turnNo);
-          netFails = 0;
-        } catch (err) {
-          console.error('generate failed:', err);
-          netFails += 1;
-          if (netFails >= OFFLINE_AFTER_FAILS) {
-            bailToOffline = true;
-            break;
-          }
-          await wait(3000, abortSignal);
-          continue;
-        }
         const { netError } = await speakAndType(speaker, text, cb, abortSignal);
         if (netError) {
           netFails += 1;
@@ -242,14 +285,13 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         } else {
           netFails = 0;
         }
-        const line: ConversationLine = {
+        history.push({
           speaker,
           text,
-          spotName: currentSpot.name,
+          spotName: spotForTurn?.name ?? null,
           createdAt: Date.now(),
-        };
-        history.push(line);
-        cb.onSpeakEnd(speaker, text, currentSpot);
+        });
+        cb.onSpeakEnd(speaker, text, spotForTurn ?? null);
         await wait(WAIT_BETWEEN_MS, abortSignal);
       }
       if (bailToOffline) continue;

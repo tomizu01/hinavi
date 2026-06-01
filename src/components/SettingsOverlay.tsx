@@ -33,7 +33,7 @@ export default function SettingsOverlay() {
       <button
         onClick={() => setOpen(true)}
         aria-label="設定"
-        className="absolute top-2 right-2 z-10 w-10 h-10 rounded-full bg-neutral-800/80 hover:bg-neutral-700 text-white shadow-lg backdrop-blur-sm flex items-center justify-center"
+        className="absolute top-2 right-2 z-[1100] w-10 h-10 rounded-full bg-neutral-800/80 hover:bg-neutral-700 text-white shadow-lg backdrop-blur-sm flex items-center justify-center"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="3" />
@@ -43,7 +43,7 @@ export default function SettingsOverlay() {
 
       {open && (
         <div
-          className="fixed inset-0 z-30 bg-black/60 flex items-center justify-center px-4"
+          className="fixed inset-0 z-[1200] bg-black/60 flex items-center justify-center px-4"
           onClick={() => setOpen(false)}
         >
           <div

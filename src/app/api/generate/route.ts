@@ -2,56 +2,174 @@ import { NextResponse } from 'next/server';
 import type { RowDataPacket } from 'mysql2';
 import { getSession } from '@/lib/session';
 import { CHARACTERS } from '@/lib/characters';
-import { loadCharacterPrompt } from '@/lib/prompts';
+import { loadCharacterPrompt, loadKaiwaPrompt } from '@/lib/prompts';
 import { pool } from '@/lib/db';
-import type { GenerateRequest } from '@/lib/types';
+import type { ConversationLine, ConversationMode, GenerateRequest, Spot } from '@/lib/types';
 
 const DEFAULT_USER_NAME = 'あなた';
 
 export const runtime = 'nodejs';
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview';
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.1-flash-lite';
+const MAX_OUTPUT_TOKENS = 1024;
+const HISTORY_MAX = 5;
 
 interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 }
 
+interface GeneratedPair {
+  misaki: string;
+  hiyori: string;
+}
+
+function jstTime(): string {
+  const fmt = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  return fmt.format(new Date());
+}
+
 function buildPrompt(
-  req: GenerateRequest,
-  characterPrompt: string,
+  body: GenerateRequest,
+  characterPrompts: { misaki: string; hiyori: string },
+  kaiwaPrompt: string,
   userName: string,
-  variant: 1 | 2,
 ): string {
-  const recentHistory = req.history.slice(-10).map((h) => {
+  const fillUser = (s: string) => s.replaceAll('{user_name}', userName);
+
+  const recentHistory = body.history.slice(-HISTORY_MAX).map((h) => {
     const name = CHARACTERS[h.speaker].displayName;
     return `${name}: ${h.text}`;
   }).join('\n');
 
-  const speakerName = CHARACTERS[req.speaker].displayName;
-  const role = req.speaker === 'misaki' ? '案内役' : '盛り上げ役';
-  const filledCharacterPrompt = characterPrompt.replaceAll('{user_name}', userName);
+  let contextSection = '';
+  if (body.mode === 'spot' && body.spot) {
+    const continuationNote = body.isSpotContinuation
+      ? '現在、以下のスポット情報について会話を継続中です。'
+      : '話題にするスポットの情報が変更されました。下記のスポットを話題にして新規に会話してください。';
+    contextSection = `
+## 会話継続状況
+${continuationNote}
 
-  const spotSection =
-    variant === 1
-      ? `
+## 話題にするスポット
+- 名称: ${body.spot.name}
+- 位置: 緯度 ${body.spot.lat.toFixed(5)}, 経度 ${body.spot.lng.toFixed(5)}
+- カテゴリ: ${body.spot.types.join(', ')}`;
+  } else if (body.mode === 'time') {
+    contextSection = `
+## 現在時刻
+${jstTime()}（日本時間）`;
+  }
 
-## 現在話題にしているスポット
-- 名称: ${req.spot.name}
-- 位置: 緯度 ${req.spot.lat.toFixed(5)}, 経度 ${req.spot.lng.toFixed(5)}
-- カテゴリ: ${req.spot.types.join(', ')}`
-      : '';
+  return `# キャラクター設定: みさき
+${fillUser(characterPrompts.misaki)}
 
-  return `あなたは「${speakerName}」（${role}）として、自転車で走るライダーへの音声案内の会話に参加します。
+# キャラクター設定: ひより
+${fillUser(characterPrompts.hiyori)}
 
-## キャラクター設定
-${filledCharacterPrompt}${spotSection}
+# 会話シーン指示
+${fillUser(kaiwaPrompt)}
+${contextSection}
 
-## これまでの会話（直近のみ）
+# これまでの会話（直近${HISTORY_MAX}件）
 ${recentHistory || '（まだ会話は始まっていません）'}
 
-## あなたの次の発話
-上記の設定に従い、${speakerName}としての次の1発話だけを日本語で出力してください。
-発話本文のみを出力し、話者名や引用符、説明、ト書きは付けないでください。`;
+# 出力指示
+上記の設定に従い、みさきとひよりの次の1往復の発話を JSON で出力してください。
+- 話者名・引用符・説明・ト書きは含めない
+- 各発話は1〜3文、最大100文字以内
+- 出力は { "misaki": "...", "hiyori": "..." } の形式のみ`;
+}
+
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    misaki: { type: 'string' },
+    hiyori: { type: 'string' },
+  },
+  required: ['misaki', 'hiyori'],
+};
+
+async function callGeminiOnce(apiKey: string, prompt: string): Promise<GeneratedPair> {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.9,
+        topP: 0.95,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        thinkingConfig: { thinkingLevel: 'low' },
+        responseMimeType: 'application/json',
+        responseSchema: RESPONSE_SCHEMA,
+      },
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`gemini http ${res.status}: ${detail}`);
+  }
+  const data = (await res.json()) as GeminiResponse;
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('').trim();
+  if (!text) throw new Error('gemini empty response');
+  const parsed = JSON.parse(text) as { misaki?: unknown; hiyori?: unknown };
+  if (typeof parsed.misaki !== 'string' || typeof parsed.hiyori !== 'string') {
+    throw new Error('gemini response missing speaker fields');
+  }
+  return { misaki: parsed.misaki.trim(), hiyori: parsed.hiyori.trim() };
+}
+
+async function callGeminiWithRetry(apiKey: string, prompt: string): Promise<GeneratedPair> {
+  try {
+    return await callGeminiOnce(apiKey, prompt);
+  } catch (err) {
+    console.warn('gemini call failed, retrying once:', err);
+    return await callGeminiOnce(apiKey, prompt);
+  }
+}
+
+async function insertConversation(
+  userId: number,
+  sessionId: string,
+  turnNo: number,
+  mode: ConversationMode,
+  speaker: 'misaki' | 'hiyori',
+  text: string,
+  spot: Spot | undefined,
+): Promise<void> {
+  await pool.execute(
+    `INSERT INTO conversations
+     (user_id, session_id, turn_no, mode, speaker, spot_name, spot_lat, spot_lng, text)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userId,
+      sessionId,
+      turnNo,
+      mode,
+      speaker,
+      spot?.name ?? null,
+      spot?.lat ?? null,
+      spot?.lng ?? null,
+      text,
+    ],
+  );
+}
+
+function validBody(b: unknown): b is GenerateRequest {
+  if (!b || typeof b !== 'object') return false;
+  const r = b as Record<string, unknown>;
+  if (r.mode !== 'spot' && r.mode !== 'rest' && r.mode !== 'time') return false;
+  if (typeof r.turnNo !== 'number') return false;
+  if (typeof r.sessionId !== 'string') return false;
+  if (!Array.isArray(r.history)) return false;
+  if (r.mode === 'spot' && (!r.spot || typeof r.spot !== 'object')) return false;
+  return true;
 }
 
 export async function POST(req: Request) {
@@ -61,13 +179,17 @@ export async function POST(req: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return NextResponse.json({ error: 'gemini key not configured' }, { status: 500 });
 
-  const body = (await req.json().catch(() => null)) as (GenerateRequest & { sessionId?: string; turnNo?: number }) | null;
-  if (!body?.speaker || !body?.spot || !Array.isArray(body.history)) {
+  const body = (await req.json().catch(() => null)) as unknown;
+  if (!validBody(body)) {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
+  const req2 = body as GenerateRequest & { history: ConversationLine[] };
 
-  const variant: 1 | 2 = typeof body.turnNo === 'number' && body.turnNo % 2 === 0 ? 2 : 1;
-  const characterPrompt = await loadCharacterPrompt(body.speaker, variant);
+  const [misakiPrompt, hiyoriPrompt, kaiwaPrompt] = await Promise.all([
+    loadCharacterPrompt('misaki'),
+    loadCharacterPrompt('hiyori'),
+    loadKaiwaPrompt(req2.mode),
+  ]);
 
   let userName = DEFAULT_USER_NAME;
   try {
@@ -81,56 +203,29 @@ export async function POST(req: Request) {
     console.error('display_name fetch failed:', err);
   }
 
-  const prompt = buildPrompt(body, characterPrompt, userName, variant);
+  const prompt = buildPrompt(
+    req2,
+    { misaki: misakiPrompt, hiyori: hiyoriPrompt },
+    kaiwaPrompt,
+    userName,
+  );
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.9,
-        topP: 0.95,
-        // Gemini 3 family は推論モデルで thinking tokens が maxOutputTokens に含まれるため余裕を持たせる
-        maxOutputTokens: 4096,
-        thinkingConfig: { thinkingLevel: 'low' },
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text();
-    console.error('Gemini error:', res.status, detail);
+  let pair: GeneratedPair;
+  try {
+    pair = await callGeminiWithRetry(apiKey, prompt);
+  } catch (err) {
+    console.error('gemini failed after retry:', err);
     return NextResponse.json({ error: 'generation failed' }, { status: 502 });
   }
 
-  const data = (await res.json()) as GeminiResponse;
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('').trim();
-  if (!text) {
-    return NextResponse.json({ error: 'empty response' }, { status: 502 });
+  try {
+    await Promise.all([
+      insertConversation(session.userId, req2.sessionId, req2.turnNo, req2.mode, 'misaki', pair.misaki, req2.spot),
+      insertConversation(session.userId, req2.sessionId, req2.turnNo, req2.mode, 'hiyori', pair.hiyori, req2.spot),
+    ]);
+  } catch (err) {
+    console.error('conversation insert failed:', err);
   }
 
-  if (body.sessionId && typeof body.turnNo === 'number') {
-    try {
-      await pool.execute(
-        `INSERT INTO conversations (user_id, session_id, turn_no, speaker, spot_name, spot_lat, spot_lng, text)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          session.userId,
-          body.sessionId,
-          body.turnNo,
-          body.speaker,
-          body.spot.name,
-          body.spot.lat,
-          body.spot.lng,
-          text,
-        ],
-      );
-    } catch (err) {
-      console.error('conversation insert failed:', err);
-    }
-  }
-
-  return NextResponse.json({ text });
+  return NextResponse.json(pair);
 }
