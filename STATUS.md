@@ -171,6 +171,9 @@ mysql -u ai -p hinavi
 | 低 | 会話履歴の整理 UI | `conversations` テーブルは溜まる一方なので、簡易ダッシュボードがあると便利 |
 | 低 | iOS/Safari 対応 | 仕様上スコープ外だが、Wake Lock 以外は動く可能性あり |
 | 中 | Aivis Cloud 本番運用検討 | 本番は自前サーバ（AivisSpeech Engine セルフホスト）への移管予定。Cloud は Premium 定額だが RPM 10 上限が複数ユーザー同時運用時のボトルネック |
+| 中 | Places API の二段構え化 | 複数ユーザー展開時の Nearby Search (Pro) 課金抑制目的。1段目を OSM (Overpass API) + Wikipedia/Wikidata に置き、ヒット薄い時のみ Places にフォールバック。景観/歴史話は無料側で完結、飲食レコメンドだけ Places に寄せる想定。Overpass 公開エンドポイントのレート制限と田舎の POI 密度不足が要検証。**次回耐久テスト時の検証項目**: `/api/places/nearby` 内で OSM/Places 両方コールしてレスポンスをログ出力（DB 保存 or サーバログ）→ 同経路における OSM カバレッジ実測（POI 密度、ヒット率、種別偏り）。検証フェーズではユーザー向けには Places の結果のみを返却し、OSM 側はログ専用に走らせる |
+| 中 | 地図を Google Maps → 地理院タイル化 | 走行中の地図閲覧優先度は低いため、Maps JavaScript API の従量課金を切る。Leaflet + 地理院タイル (`https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png`) に差し替え、`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` 依存も解消。要件: 「地理院タイル」帰属表示を地図右下に常時表示。規模拡大時（月数十万アクセス超）は国土地理院への届出が必要 |
+| 中 | Gemini コスト削減（複合施策） | 16hr 耐久で ¥1,100 程度発生。ユーザー割り込みが無い前提を活かして以下を組み合わせる: ① **2話者1コール化**: `/api/generate` を `{misaki, hiyori}` の JSON 構造化出力に変更（`responseSchema` 利用）。conversationLoop は `generatePair()` → 順次再生に。入力 token 50%減 + 会話の繋がりも向上 / ② **モデル lite 化**: `gemini-3.5-flash` → `gemini-3-flash-lite` 等（雑談に推論モデルは過剰、単価 1/3〜1/5） / ③ **履歴を 10 → 5 件**（`conversationLoop.ts` `HISTORY_MAX`） / ④ **`maxOutputTokens: 4096 → 1024`** / ⑤ **Gemini Context Caching**（キャラプロンプト固定部の明示キャッシュ）。①②③④まとめると ¥1,100 → ¥150 オーダーまで落とせる試算。実装は generate ルート + conversationLoop の2ファイル改修。失敗時は2コール方式へフォールバック実装すること |
 | 低 | Aivis 音声モデルの独自化 | 現状は研究開発用モデル（みさき / ひより）。実用化時は独自モデルを作成予定 |
 | 低 | ElevenLabs 切替の運用判断 | 聴感比較で ElevenLabs > Aivis（円滑さ）。Aivis Cloud の RPM 10 で本番運用が厳しい場合、Aivis セルフホストよりも ElevenLabs 主軸に倒す選択肢もあり |
 

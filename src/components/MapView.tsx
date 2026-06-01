@@ -54,13 +54,14 @@ export default function MapView({ position, online }: Props) {
     }
   }, [position]);
 
-  if (!online) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-neutral-800 text-neutral-300">
-        圏外
-      </div>
-    );
-  }
-
-  return <div ref={containerRef} className="w-full h-full" />;
+  return (
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full" />
+      {!online && (
+        <div className="absolute inset-0 flex items-center justify-center bg-neutral-800/70 text-neutral-100 pointer-events-none">
+          圏外
+        </div>
+      )}
+    </div>
+  );
 }
