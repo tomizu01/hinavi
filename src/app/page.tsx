@@ -1,8 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import MapView from '@/components/MapView';
+import dynamic from 'next/dynamic';
 import SpeechRow from '@/components/SpeechRow';
+
+const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 import SettingsOverlay from '@/components/SettingsOverlay';
 import type { CharacterId } from '@/lib/characters';
 import type { Spot } from '@/lib/types';
