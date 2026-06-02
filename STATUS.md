@@ -152,9 +152,13 @@ mysql -u ai -p hinavi
   - 各ターン 2 行（misaki, hiyori）を `conversations` テーブルに `mode` 付きで保存
 - **ユーザー呼称**: `prompts/**/*.md` 内の `{user_name}` を `users.display_name` で置換（NULL/空時は `'あなた'` フォールバック）。現状の `misaki.md` / `hiyori.md` / `kaiwa*.md` に placeholder は無いが、機能は維持
 - **スポット取得**: `src/app/api/places/nearby/route.ts`
-  - OSM (Overpass) 5km と Google Places 2km を並列コール
-  - OSM ヒットが 1 件以上ならそれを使用、0 件のとき Places にフォールバック
-  - 両結果（件数・種別分布・所要 ms・エラー・使用ソース）を `osm_places_compare` テーブルへログ
+  - **3段直列フォールバック**: OSM 2km → 0件なら OSM 5km → 0件なら Google Places 2km
+  - 都会では 2km で十分ヒットして遠目のスポットを拾わない、田舎では 5km/Places で救済する設計
+  - OSM 1段あたり 12s タイムアウト、Places 10s タイムアウト。最悪ケース合計 34s（クライアント側 `PLACES_TIMEOUT_MS=38s` で吸収）
+  - 各リクエストを `osm_places_compare` テーブルへログ（件数・種別分布・所要 ms・エラー・使用ソース）
+    - `used_source`: `osm_2k` / `osm_5k` / `places` / `none`
+    - `osm_count` は使用した OSM 段の件数。`osm_ms` は実行した OSM 段の所要時間合計（2k のみなら 2k 分、5k まで走ったら 2k+5k の合計）
+    - `places_count` / `places_ms` は Places を実コールした時のみ非0
   - OSM は urban で数千件返るため、サーバ側で 100 件にランダムサンプル
 - **画面構成**:
   - 地図: Leaflet + 地理院タイル(pale)。現在地は緑の circleMarker。右下に「地理院タイル」帰属表示
@@ -211,6 +215,23 @@ mysql -u ai -p hinavi
 - DNS: `hinavi.mediowl.ai` → ALB
 
 ## 11. 直近の作業ログ
+
+### 2026-06-02: スポット取得を3段直列フォールバックへ変更
+
+第2回耐久テスト前の歩行検証で「都会で遠目のスポットを拾いがち」という所見。一方、田舎では 2km まで絞ると枯渇する懸念が残るため、半径違いの 2段 OSM + Places の 3段直列に変更。
+
+**変更点** (`src/app/api/places/nearby/route.ts`):
+- 旧: OSM 5km + Places 2km の **並列コール**、OSM 0件のとき Places を採用
+- 新: **OSM 2km → 0件なら OSM 5km → 0件なら Places 2km** の直列フォールバック。1件でも取れた段で即返却
+- OSM の per-call タイムアウトを 22s → 12s（最悪 12+12+10=34s に収める）
+- `osm_places_compare.used_source` の取りうる値を `osm_2k` / `osm_5k` / `places` / `none` に拡張（DDL 変更なし、VARCHAR(16) に収まる）
+- 案3方式の運用: `osm_count` は使用 OSM 段の件数、`osm_ms` は走った OSM 段の合計 ms、`places_count`/`places_ms` は Places を実コールした時のみ非0
+
+**クライアント** (`src/lib/client/conversationLoop.ts`):
+- `PLACES_TIMEOUT_MS` を 30s → 38s（サーバ側最悪 34s をカバー）
+
+**未実装の検討事項**
+- `kaiwa1.md` で「ユーザーへの問いかけ」が任意指定 (`含めてもよい`) のため、長時間走行でキャラ同士のみで会話が完結しがちな件は別途プロンプト調整が必要（A: kaiwa1 を必須化 / B: characters/*.md にユーザー意識ルール / C: `/api/generate` 側で `turnNo % 4` で動的注入）
 
 ### 2026-06-01: 第2回耐久テストに向けた §12 改修一括実装
 

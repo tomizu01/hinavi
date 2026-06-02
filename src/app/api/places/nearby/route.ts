@@ -7,9 +7,10 @@ import type { Spot } from '@/lib/types';
 export const runtime = 'nodejs';
 
 const PLACES_ENDPOINT = 'https://places.googleapis.com/v1/places:searchNearby';
-const OSM_RADIUS_M = 5000;
+const OSM_RADIUS_NEAR_M = 2000;
+const OSM_RADIUS_FAR_M = 5000;
 const PLACES_RADIUS_M = 2000;
-const OSM_TIMEOUT_MS = 22_000;
+const OSM_TIMEOUT_MS = 12_000;
 const PLACES_TIMEOUT_MS = 10_000;
 
 const PLACES_INCLUDED_TYPES = [
@@ -94,6 +95,10 @@ interface SourceResult {
   ms: number;
 }
 
+type UsedSource = 'osm_2k' | 'osm_5k' | 'places' | 'none';
+
+const EMPTY_RESULT: SourceResult = { ok: true, spots: [], error: null, ms: 0 };
+
 async function runWithTimeout(
   task: (signal: AbortSignal) => Promise<Spot[]>,
   timeoutMs: number,
@@ -119,7 +124,7 @@ async function logCompare(args: {
   lng: number;
   osm: SourceResult;
   places: SourceResult;
-  usedSource: 'osm' | 'places' | 'none';
+  usedSource: UsedSource;
 }): Promise<void> {
   try {
     await pool.execute(
@@ -163,33 +168,73 @@ export async function POST(req: Request) {
   const sessionId = typeof body.sessionId === 'string' ? body.sessionId : null;
   const { lat, lng } = body;
 
-  const [osm, places] = await Promise.all([
-    runWithTimeout((signal) => fetchOsmNearby(lat, lng, OSM_RADIUS_M, signal), OSM_TIMEOUT_MS),
-    runWithTimeout((signal) => fetchPlacesNearby(lat, lng, apiKey, signal), PLACES_TIMEOUT_MS),
-  ]);
+  // Tier 1: OSM 2km
+  const osmNear = await runWithTimeout(
+    (signal) => fetchOsmNearby(lat, lng, OSM_RADIUS_NEAR_M, signal),
+    OSM_TIMEOUT_MS,
+  );
+  if (osmNear.spots.length > 0) {
+    await logCompare({
+      userId: session.userId,
+      sessionId,
+      lat,
+      lng,
+      osm: osmNear,
+      places: EMPTY_RESULT,
+      usedSource: 'osm_2k',
+    });
+    return NextResponse.json({ spots: osmNear.spots });
+  }
 
-  const useOsm = osm.spots.length > 0;
-  const usedSource: 'osm' | 'places' | 'none' = useOsm
-    ? 'osm'
-    : places.spots.length > 0
-      ? 'places'
-      : 'none';
-  const spots = useOsm ? osm.spots : places.spots;
+  // Tier 2: OSM 5km (only if 2km returned 0)
+  const osmFar = await runWithTimeout(
+    (signal) => fetchOsmNearby(lat, lng, OSM_RADIUS_FAR_M, signal),
+    OSM_TIMEOUT_MS,
+  );
+  const osmCombined: SourceResult = {
+    ok: osmFar.ok,
+    spots: osmFar.spots,
+    error: osmFar.error ?? osmNear.error,
+    ms: osmNear.ms + osmFar.ms,
+  };
+  if (osmFar.spots.length > 0) {
+    await logCompare({
+      userId: session.userId,
+      sessionId,
+      lat,
+      lng,
+      osm: osmCombined,
+      places: EMPTY_RESULT,
+      usedSource: 'osm_5k',
+    });
+    return NextResponse.json({ spots: osmFar.spots });
+  }
+
+  // Tier 3: Google Places 2km fallback
+  const places = await runWithTimeout(
+    (signal) => fetchPlacesNearby(lat, lng, apiKey, signal),
+    PLACES_TIMEOUT_MS,
+  );
+  const usedSource: UsedSource = places.spots.length > 0 ? 'places' : 'none';
 
   await logCompare({
     userId: session.userId,
     sessionId,
     lat,
     lng,
-    osm,
+    osm: osmCombined,
     places,
     usedSource,
   });
 
-  if (!useOsm && !places.ok && places.spots.length === 0) {
-    console.error('both osm and places failed:', { osm: osm.error, places: places.error });
+  if (places.spots.length === 0 && !places.ok) {
+    console.error('all tiers failed:', {
+      osmNear: osmNear.error,
+      osmFar: osmFar.error,
+      places: places.error,
+    });
     return NextResponse.json({ error: 'places lookup failed' }, { status: 502 });
   }
 
-  return NextResponse.json({ spots });
+  return NextResponse.json({ spots: places.spots });
 }
