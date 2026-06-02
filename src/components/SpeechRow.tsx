@@ -13,16 +13,15 @@ interface Props {
 export default function SpeechRow({ speaker, text, side }: Props) {
   const char = CHARACTERS[speaker];
   const charImg = (
-    <div className="relative w-20 h-20 shrink-0 self-end">
-      <Image
-        src={char.imagePath}
-        alt={char.displayName}
-        fill
-        sizes="80px"
-        className="object-contain"
-        priority
-      />
-    </div>
+    <Image
+      src={char.imagePath}
+      alt={char.displayName}
+      width={80}
+      height={67}
+      sizes="80px"
+      className="shrink-0 self-end rounded-lg"
+      priority
+    />
   );
   const bubble = (
     <div className="flex-1 min-w-0 bg-neutral-800 rounded-2xl px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words min-h-[3rem] flex items-center">
