@@ -20,11 +20,13 @@ function buildQuery(lat: number, lng: number, radiusM: number, timeoutSec: numbe
   const r = Math.round(radiusM);
   return `[out:json][timeout:${timeoutSec}];
 (
-  nwr["tourism"~"attraction|museum|gallery|viewpoint|artwork|theme_park|zoo|aquarium"](around:${r},${lat},${lng});
+  nwr["tourism"~"attraction|museum|gallery|viewpoint|artwork|theme_park|zoo|aquarium|hotel|hostel|guest_house|alpine_hut|camp_site"](around:${r},${lat},${lng});
   nwr["historic"](around:${r},${lat},${lng});
-  nwr["amenity"~"cafe|restaurant|bar|ice_cream|fast_food|place_of_worship"](around:${r},${lat},${lng});
+  nwr["amenity"~"cafe|restaurant|bar|ice_cream|fast_food|place_of_worship|drinking_water|public_bath"](around:${r},${lat},${lng});
   nwr["shop"~"bakery|confectionery|pastry"](around:${r},${lat},${lng});
   nwr["leisure"~"park|garden"](around:${r},${lat},${lng});
+  nwr["railway"~"station|halt"](around:${r},${lat},${lng});
+  nwr["natural"~"peak|waterfall|spring"](around:${r},${lat},${lng});
 );
 out center tags;`;
 }
@@ -36,6 +38,8 @@ function extractTypes(tags: Record<string, string>): string[] {
   if (tags.amenity) out.push(`amenity:${tags.amenity}`);
   if (tags.shop) out.push(`shop:${tags.shop}`);
   if (tags.leisure) out.push(`leisure:${tags.leisure}`);
+  if (tags.railway) out.push(`railway:${tags.railway}`);
+  if (tags.natural) out.push(`natural:${tags.natural}`);
   if (tags.religion) out.push(`religion:${tags.religion}`);
   return out;
 }
