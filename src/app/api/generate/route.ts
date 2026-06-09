@@ -233,5 +233,5 @@ export async function POST(req: Request) {
     console.error('conversation insert failed:', err);
   }
 
-  return NextResponse.json(pair);
+  return NextResponse.json({ ...pair, topic });
 }

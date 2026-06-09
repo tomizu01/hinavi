@@ -7,6 +7,7 @@ import SpeechRow from '@/components/SpeechRow';
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 import SettingsOverlay from '@/components/SettingsOverlay';
 import type { CharacterId } from '@/lib/characters';
+import type { ConversationMode } from '@/lib/types';
 import type { GeoPoint } from '@/lib/client/geo';
 import { startConversationLoop, type LoopController } from '@/lib/client/conversationLoop';
 import { requestWakeLock, reacquireOnVisible } from '@/lib/client/wakeLock';
@@ -17,12 +18,28 @@ interface SpeechState {
   hiyori: string;
 }
 
+function TopicBanner({ info }: { info: { mode: ConversationMode; topic: string } | null }) {
+  if (!info) return null;
+  let label = '話題';
+  let body = info.topic;
+  if (info.mode === 'rest') { label = '休憩タイム'; body = ''; }
+  else if (info.mode === 'time') { label = '時刻のお知らせ'; body = ''; }
+  else if (!body) { body = '(話題未取得)'; }
+  return (
+    <div className="mx-3 px-3 py-1.5 rounded-md bg-neutral-800/80 border border-neutral-700 text-xs text-neutral-200">
+      <span className="text-emerald-400 font-medium mr-2">{label}</span>
+      <span className="text-neutral-300">{body}</span>
+    </div>
+  );
+}
+
 export default function MainPage() {
   const [started, setStarted] = useState(false);
   const [paused, setPaused] = useState(false);
   const [online, setOnline] = useState(true);
   const [position, setPosition] = useState<GeoPoint | null>(null);
   const [speech, setSpeech] = useState<SpeechState>({ misaki: '', hiyori: '' });
+  const [turnInfo, setTurnInfo] = useState<{ mode: ConversationMode; topic: string } | null>(null);
 
   const pausedRef = useRef(false);
   const onlineRef = useRef(true);
@@ -56,6 +73,9 @@ export default function MainPage() {
     setSpeech((prev) => prev[speaker] === text ? prev : { ...prev, [speaker]: text });
   }, []);
   const onSpeakEnd = useCallback(() => {}, []);
+  const onTurnInfo = useCallback((mode: ConversationMode, topic: string) => {
+    setTurnInfo({ mode, topic });
+  }, []);
   const onOfflineNotice = useCallback(async () => {
     setSpeech({ misaki: 'ここは圏外のようです。電波が戻るまで少し待ちますね。', hiyori: '' });
   }, []);
@@ -89,9 +109,10 @@ export default function MainPage() {
       onSpeakStart,
       onTextProgress,
       onSpeakEnd,
+      onTurnInfo,
       onOfflineNotice,
     });
-  }, [onSpeakStart, onTextProgress, onSpeakEnd, onOfflineNotice]);
+  }, [onSpeakStart, onTextProgress, onSpeakEnd, onTurnInfo, onOfflineNotice]);
 
   const handlePauseToggle = useCallback(() => {
     setPaused((prev) => {
@@ -142,6 +163,7 @@ export default function MainPage() {
         <SettingsOverlay />
       </div>
       <div className="shrink-0 flex flex-col gap-2 py-2">
+        <TopicBanner info={turnInfo} />
         <SpeechRow speaker="misaki" text={speech.misaki} side="right" />
         <SpeechRow speaker="hiyori" text={speech.hiyori} side="left" />
       </div>

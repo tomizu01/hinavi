@@ -18,6 +18,7 @@ export interface LoopCallbacks {
   onSpeakStart: (speaker: CharacterId) => void;
   onTextProgress: (speaker: CharacterId, text: string) => void;
   onSpeakEnd: (speaker: CharacterId, fullText: string) => void;
+  onTurnInfo: (mode: ConversationMode, topic: string) => void;
   onOfflineNotice: () => Promise<void>;
 }
 
@@ -175,6 +176,8 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         netFails += 1;
         continue;
       }
+
+      cb.onTurnInfo(mode, pair.topic ?? '');
 
       let bailToOffline = false;
       const lines: Array<{ speaker: CharacterId; text: string }> = [
