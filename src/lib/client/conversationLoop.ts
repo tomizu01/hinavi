@@ -11,6 +11,7 @@ const OFFLINE_AFTER_FAILS = 2;
 
 const REST_INTERVAL = 6;
 const TIME_INTERVAL = 30;
+const TURNS_PER_TOPIC = 3;
 
 export interface LoopCallbacks {
   isPaused: () => boolean;
@@ -28,6 +29,7 @@ interface GenerateBody {
   sessionId: string;
   history: ConversationLine[];
   climbCount: number;
+  topic?: string;
 }
 
 function computeMode(turnNo: number): ConversationMode {
@@ -143,6 +145,8 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
   const history: ConversationLine[] = [];
   let turnNo = 0;
   let netFails = 0;
+  let currentTopic: string | null = null;
+  let topicTurnCount = 0;
 
   (async () => {
     while (!abortSignal.aborted) {
@@ -161,6 +165,14 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
       turnNo += 1;
       const mode = computeMode(turnNo);
 
+      let topicForRequest: string | undefined;
+      if (mode === 'topic') {
+        if (currentTopic && topicTurnCount < TURNS_PER_TOPIC) {
+          topicForRequest = currentTopic;
+        }
+        // else: leave undefined → server picks a random topic
+      }
+
       let pair: GenerateResponse;
       try {
         pair = await generatePair({
@@ -169,6 +181,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
           sessionId,
           history: filterHistory(history),
           climbCount: getClimbCount(),
+          topic: topicForRequest,
         });
         netFails = 0;
       } catch (err) {
@@ -177,6 +190,15 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         continue;
       }
 
+      if (mode === 'topic') {
+        const returned = pair.topic ?? '';
+        if (topicForRequest !== undefined && returned === topicForRequest) {
+          topicTurnCount += 1;
+        } else {
+          currentTopic = returned.length > 0 ? returned : null;
+          topicTurnCount = 1;
+        }
+      }
       cb.onTurnInfo(mode, pair.topic ?? '');
 
       let bailToOffline = false;

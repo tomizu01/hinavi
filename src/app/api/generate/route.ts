@@ -173,6 +173,7 @@ function validBody(b: unknown): b is GenerateRequest {
   if (typeof r.sessionId !== 'string') return false;
   if (!Array.isArray(r.history)) return false;
   if (typeof r.climbCount !== 'number') return false;
+  if (r.topic !== undefined && typeof r.topic !== 'string') return false;
   return true;
 }
 
@@ -189,11 +190,14 @@ export async function POST(req: Request) {
   }
   const req2 = body as GenerateRequest & { history: ConversationLine[] };
 
+  const clientTopic = typeof req2.topic === 'string' ? req2.topic.trim() : '';
   const [misakiPrompt, hiyoriPrompt, kaiwaPrompt, topic] = await Promise.all([
     loadCharacterPrompt('misaki'),
     loadCharacterPrompt('hiyori'),
     loadKaiwaPrompt(req2.mode),
-    req2.mode === 'topic' ? pickRandomTopic() : Promise.resolve(''),
+    req2.mode === 'topic'
+      ? (clientTopic.length > 0 ? Promise.resolve(clientTopic) : pickRandomTopic())
+      : Promise.resolve(''),
   ]);
 
   let userName = DEFAULT_USER_NAME;

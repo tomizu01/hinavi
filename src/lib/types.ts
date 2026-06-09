@@ -14,6 +14,7 @@ export interface GenerateRequest {
   sessionId: string;
   history: ConversationLine[];
   climbCount: number;
+  topic?: string;
 }
 
 export interface GenerateResponse {
