@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS conversations (
 -- 既存環境向け（mode 後付け用。未適用なら手動実行）:
 -- ALTER TABLE conversations ADD COLUMN mode VARCHAR(16) DEFAULT NULL AFTER turn_no;
 
+-- hinavi2（エベレスティング応援版）専用テーブル。
+-- GPS スポットの代わりに、ここに登録された話題からランダムに1件を選び
+-- kaiwa1.md の {topic} プレースホルダに差し込む。
+CREATE TABLE IF NOT EXISTS topics (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  topic       TEXT NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS osm_places_compare (
   id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id       INT UNSIGNED NOT NULL,

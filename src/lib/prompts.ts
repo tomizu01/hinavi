@@ -20,7 +20,7 @@ export function loadCharacterPrompt(id: CharacterId): Promise<string> {
 }
 
 const KAIWA_PATHS: Record<ConversationMode, string> = {
-  spot: 'prompts/kaiwa/kaiwa1.md',
+  topic: 'prompts/kaiwa/kaiwa1.md',
   rest: 'prompts/kaiwa/kaiwa2.md',
   time: 'prompts/kaiwa/kaiwa3.md',
 };

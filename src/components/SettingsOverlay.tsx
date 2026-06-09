@@ -1,20 +1,34 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getTtsEngine, setTtsEngine, type TtsEngine } from '@/lib/client/settings';
+import {
+  getTtsEngine,
+  setTtsEngine,
+  getClimbCount,
+  setClimbCount,
+  CLIMB_COUNT_MIN,
+  CLIMB_COUNT_MAX,
+  type TtsEngine,
+} from '@/lib/client/settings';
 
 export default function SettingsOverlay() {
   const [open, setOpen] = useState(false);
   const [engine, setEngineState] = useState<TtsEngine>('aivis');
+  const [climb, setClimb] = useState<number>(CLIMB_COUNT_MIN);
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     setEngineState(getTtsEngine());
+    setClimb(getClimbCount());
   }, []);
 
   const handleEngineChange = (next: TtsEngine) => {
     setEngineState(next);
     setTtsEngine(next);
+  };
+
+  const handleClimbDelta = (delta: number) => {
+    setClimb((prev) => setClimbCount(prev + delta));
   };
 
   const handleLogout = async () => {
@@ -59,6 +73,32 @@ export default function SettingsOverlay() {
               >
                 ×
               </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs text-neutral-400">現在のクライム回数</div>
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={() => handleClimbDelta(-1)}
+                  disabled={climb <= CLIMB_COUNT_MIN}
+                  aria-label="クライム回数を減らす"
+                  className="w-12 h-12 rounded-lg text-2xl font-bold bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-100 disabled:opacity-30"
+                >
+                  −
+                </button>
+                <div className="flex-1 text-center">
+                  <div className="text-3xl font-bold tabular-nums">{climb}</div>
+                  <div className="text-[10px] text-neutral-500">/ {CLIMB_COUNT_MAX} 本</div>
+                </div>
+                <button
+                  onClick={() => handleClimbDelta(1)}
+                  disabled={climb >= CLIMB_COUNT_MAX}
+                  aria-label="クライム回数を増やす"
+                  className="w-12 h-12 rounded-lg text-2xl font-bold bg-emerald-700 hover:bg-emerald-600 border border-emerald-600 text-white disabled:opacity-30"
+                >
+                  ＋
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2">

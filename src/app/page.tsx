@@ -7,7 +7,6 @@ import SpeechRow from '@/components/SpeechRow';
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 import SettingsOverlay from '@/components/SettingsOverlay';
 import type { CharacterId } from '@/lib/characters';
-import type { Spot } from '@/lib/types';
 import type { GeoPoint } from '@/lib/client/geo';
 import { startConversationLoop, type LoopController } from '@/lib/client/conversationLoop';
 import { requestWakeLock, reacquireOnVisible } from '@/lib/client/wakeLock';
@@ -24,15 +23,12 @@ export default function MainPage() {
   const [online, setOnline] = useState(true);
   const [position, setPosition] = useState<GeoPoint | null>(null);
   const [speech, setSpeech] = useState<SpeechState>({ misaki: '', hiyori: '' });
-  const [, setCurrentSpot] = useState<Spot | null>(null);
 
-  const positionRef = useRef<GeoPoint | null>(null);
   const pausedRef = useRef(false);
   const onlineRef = useRef(true);
   const loopRef = useRef<LoopController | null>(null);
   const watchIdRef = useRef<number | null>(null);
 
-  useEffect(() => { positionRef.current = position; }, [position]);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   useEffect(() => { onlineRef.current = online; }, [online]);
 
@@ -60,7 +56,6 @@ export default function MainPage() {
     setSpeech((prev) => prev[speaker] === text ? prev : { ...prev, [speaker]: text });
   }, []);
   const onSpeakEnd = useCallback(() => {}, []);
-  const onSpotChange = useCallback((spot: Spot) => { setCurrentSpot(spot); }, []);
   const onOfflineNotice = useCallback(async () => {
     setSpeech({ misaki: 'ここは圏外のようです。電波が戻るまで少し待ちますね。', hiyori: '' });
   }, []);
@@ -89,16 +84,14 @@ export default function MainPage() {
 
     setStarted(true);
     loopRef.current = startConversationLoop({
-      getPosition: () => positionRef.current,
       isPaused: () => pausedRef.current,
       isOnline: () => onlineRef.current,
       onSpeakStart,
       onTextProgress,
       onSpeakEnd,
-      onSpotChange,
       onOfflineNotice,
     });
-  }, [onSpeakStart, onTextProgress, onSpeakEnd, onSpotChange, onOfflineNotice]);
+  }, [onSpeakStart, onTextProgress, onSpeakEnd, onOfflineNotice]);
 
   const handlePauseToggle = useCallback(() => {
     setPaused((prev) => {

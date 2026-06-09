@@ -24,3 +24,40 @@ export function setTtsEngine(engine: TtsEngine): void {
     /* noop */
   }
 }
+
+const CLIMB_COUNT_KEY = 'hinavi.climbCount';
+export const CLIMB_COUNT_MIN = 1;
+export const CLIMB_COUNT_MAX = 23;
+const DEFAULT_CLIMB_COUNT = 1;
+
+export function getClimbCount(): number {
+  if (typeof window === 'undefined') return DEFAULT_CLIMB_COUNT;
+  try {
+    const raw = window.localStorage.getItem(CLIMB_COUNT_KEY);
+    const n = raw === null ? NaN : parseInt(raw, 10);
+    if (!Number.isFinite(n)) return DEFAULT_CLIMB_COUNT;
+    return clampClimb(n);
+  } catch {
+    return DEFAULT_CLIMB_COUNT;
+  }
+}
+
+export function setClimbCount(n: number): number {
+  const next = clampClimb(n);
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(CLIMB_COUNT_KEY, String(next));
+    } catch {
+      /* noop */
+    }
+  }
+  return next;
+}
+
+function clampClimb(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_CLIMB_COUNT;
+  const i = Math.trunc(n);
+  if (i < CLIMB_COUNT_MIN) return CLIMB_COUNT_MIN;
+  if (i > CLIMB_COUNT_MAX) return CLIMB_COUNT_MAX;
+  return i;
+}

@@ -4,7 +4,7 @@ import { getSession } from '@/lib/session';
 import { CHARACTERS } from '@/lib/characters';
 import { loadCharacterPrompt, loadKaiwaPrompt } from '@/lib/prompts';
 import { pool } from '@/lib/db';
-import type { ConversationLine, ConversationMode, GenerateRequest, Spot } from '@/lib/types';
+import type { ConversationLine, ConversationMode, GenerateRequest } from '@/lib/types';
 
 const DEFAULT_USER_NAME = 'あなた';
 
@@ -33,13 +33,31 @@ function jstTime(): string {
   return fmt.format(new Date());
 }
 
+async function pickRandomTopic(): Promise<string> {
+  try {
+    const [rows] = await pool.execute<RowDataPacket[]>(
+      'SELECT topic FROM topics ORDER BY RAND() LIMIT 1',
+    );
+    const t = rows[0]?.topic;
+    if (typeof t === 'string' && t.trim().length > 0) return t.trim();
+  } catch (err) {
+    console.error('topics select failed:', err);
+  }
+  return '';
+}
+
 function buildPrompt(
   body: GenerateRequest,
   characterPrompts: { misaki: string; hiyori: string },
   kaiwaPrompt: string,
   userName: string,
+  topic: string,
 ): string {
-  const fillUser = (s: string) => s.replaceAll('{user_name}', userName);
+  const climbStr = String(body.climbCount);
+  const apply = (s: string) =>
+    s.replaceAll('{user_name}', userName)
+      .replaceAll('{climb_count}', climbStr)
+      .replaceAll('{topic}', topic);
 
   const recentHistory = body.history.slice(-HISTORY_MAX).map((h) => {
     const name = CHARACTERS[h.speaker].displayName;
@@ -47,32 +65,20 @@ function buildPrompt(
   }).join('\n');
 
   let contextSection = '';
-  if (body.mode === 'spot' && body.spot) {
-    const continuationNote = body.isSpotContinuation
-      ? '現在、以下のスポット情報について会話を継続中です。'
-      : '話題にするスポットの情報が変更されました。下記のスポットを話題にして新規に会話してください。';
-    contextSection = `
-## 会話継続状況
-${continuationNote}
-
-## 話題にするスポット
-- 名称: ${body.spot.name}
-- 位置: 緯度 ${body.spot.lat.toFixed(5)}, 経度 ${body.spot.lng.toFixed(5)}
-- カテゴリ: ${body.spot.types.join(', ')}`;
-  } else if (body.mode === 'time') {
+  if (body.mode === 'time') {
     contextSection = `
 ## 現在時刻
 ${jstTime()}（日本時間）`;
   }
 
   return `# キャラクター設定: みさき
-${fillUser(characterPrompts.misaki)}
+${apply(characterPrompts.misaki)}
 
 # キャラクター設定: ひより
-${fillUser(characterPrompts.hiyori)}
+${apply(characterPrompts.hiyori)}
 
 # 会話シーン指示
-${fillUser(kaiwaPrompt)}
+${apply(kaiwaPrompt)}
 ${contextSection}
 
 # これまでの会話（直近${HISTORY_MAX}件）
@@ -141,21 +147,19 @@ async function insertConversation(
   mode: ConversationMode,
   speaker: 'misaki' | 'hiyori',
   text: string,
-  spot: Spot | undefined,
+  topic: string,
 ): Promise<void> {
   await pool.execute(
     `INSERT INTO conversations
-     (user_id, session_id, turn_no, mode, speaker, spot_name, spot_lat, spot_lng, text)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (user_id, session_id, turn_no, mode, speaker, spot_name, text)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       sessionId,
       turnNo,
       mode,
       speaker,
-      spot?.name ?? null,
-      spot?.lat ?? null,
-      spot?.lng ?? null,
+      topic.length > 0 ? topic.slice(0, 255) : null,
       text,
     ],
   );
@@ -164,11 +168,11 @@ async function insertConversation(
 function validBody(b: unknown): b is GenerateRequest {
   if (!b || typeof b !== 'object') return false;
   const r = b as Record<string, unknown>;
-  if (r.mode !== 'spot' && r.mode !== 'rest' && r.mode !== 'time') return false;
+  if (r.mode !== 'topic' && r.mode !== 'rest' && r.mode !== 'time') return false;
   if (typeof r.turnNo !== 'number') return false;
   if (typeof r.sessionId !== 'string') return false;
   if (!Array.isArray(r.history)) return false;
-  if (r.mode === 'spot' && (!r.spot || typeof r.spot !== 'object')) return false;
+  if (typeof r.climbCount !== 'number') return false;
   return true;
 }
 
@@ -185,10 +189,11 @@ export async function POST(req: Request) {
   }
   const req2 = body as GenerateRequest & { history: ConversationLine[] };
 
-  const [misakiPrompt, hiyoriPrompt, kaiwaPrompt] = await Promise.all([
+  const [misakiPrompt, hiyoriPrompt, kaiwaPrompt, topic] = await Promise.all([
     loadCharacterPrompt('misaki'),
     loadCharacterPrompt('hiyori'),
     loadKaiwaPrompt(req2.mode),
+    req2.mode === 'topic' ? pickRandomTopic() : Promise.resolve(''),
   ]);
 
   let userName = DEFAULT_USER_NAME;
@@ -208,6 +213,7 @@ export async function POST(req: Request) {
     { misaki: misakiPrompt, hiyori: hiyoriPrompt },
     kaiwaPrompt,
     userName,
+    topic,
   );
 
   let pair: GeneratedPair;
@@ -220,8 +226,8 @@ export async function POST(req: Request) {
 
   try {
     await Promise.all([
-      insertConversation(session.userId, req2.sessionId, req2.turnNo, req2.mode, 'misaki', pair.misaki, req2.spot),
-      insertConversation(session.userId, req2.sessionId, req2.turnNo, req2.mode, 'hiyori', pair.hiyori, req2.spot),
+      insertConversation(session.userId, req2.sessionId, req2.turnNo, req2.mode, 'misaki', pair.misaki, topic),
+      insertConversation(session.userId, req2.sessionId, req2.turnNo, req2.mode, 'hiyori', pair.hiyori, topic),
     ]);
   } catch (err) {
     console.error('conversation insert failed:', err);

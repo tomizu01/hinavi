@@ -1,20 +1,10 @@
 import type { CharacterId } from './characters';
 
-export type ConversationMode = 'spot' | 'rest' | 'time';
-
-export interface Spot {
-  id: string;
-  name: string;
-  lat: number;
-  lng: number;
-  types: string[];
-  primaryType?: string;
-}
+export type ConversationMode = 'topic' | 'rest' | 'time';
 
 export interface ConversationLine {
   speaker: CharacterId;
   text: string;
-  spotName?: string | null;
   createdAt: number;
 }
 
@@ -23,8 +13,7 @@ export interface GenerateRequest {
   turnNo: number;
   sessionId: string;
   history: ConversationLine[];
-  spot?: Spot;
-  isSpotContinuation?: boolean;
+  climbCount: number;
 }
 
 export interface GenerateResponse {
