@@ -22,7 +22,7 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     id: 'hiyori',
     displayName: 'ひより',
     imagePath: '/characters/hiyori.png',
-    aivisModelUuid: '734c12b6-eaf2-4dbd-8596-8663c72d2afa',
+    aivisModelUuid: 'a670e6b8-0852-45b2-8704-1bc9862f2fe6',
     elevenLabsVoiceId: 'OSwaPSNdfituxkWcjlkR',
     promptPath: 'prompts/characters/hiyori.md',
   },
