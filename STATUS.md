@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-06-08（第2回フィールド耐久テスト 2026-06-07 完了。東京→信濃町 280km / 18時間、Places 段分布実測、会話の繋がり良好）
+最終更新: 2026-06-11（ひよりの Aivis モデルを `a670e6b8-...` に差し替え。音声安定性の改善を目的）
 
 ## 1. 概要
 
@@ -29,7 +29,7 @@
 ├── prompts/
 │   ├── characters/
 │   │   ├── misaki.md          案内役 みさき・キャラ設定 (Aivis model e9339137... / ElevenLabs ugYcuAusTuWCSOpJD0Xd)
-│   │   └── hiyori.md          盛り上げ役 ひより・キャラ設定 (Aivis model 734c12b6... / ElevenLabs OSwaPSNdfituxkWcjlkR)
+│   │   └── hiyori.md          盛り上げ役 ひより・キャラ設定 (Aivis model a670e6b8... / ElevenLabs OSwaPSNdfituxkWcjlkR)
 │   └── kaiwa/
 │       ├── kaiwa1.md          スポットモード用シーン指示
 │       ├── kaiwa2.md          休憩モード用シーン指示（6 ターン毎）
@@ -224,6 +224,21 @@ mysql -u ai -p hinavi
 
 ## 11. 直近の作業ログ
 
+### 2026-06-11: ひよりの Aivis モデル UUID を差し替え
+
+ひよりの音声が安定しない（推定: 抑揚や子音の暴れ）所見を受け、Aivis Cloud 上の別モデルへ差し替え。
+
+- `src/lib/characters.ts:25` `hiyori.aivisModelUuid`
+  - 旧: `734c12b6-eaf2-4dbd-8596-8663c72d2afa`
+  - 新: `a670e6b8-0852-45b2-8704-1bc9862f2fe6`
+- みさき (`e9339137-...`) は変更なし
+- `tempo_dynamics: 1.5` は維持（送信パラメタ側は触っていない）
+- 本番ビルド + 6500 プロセス入れ替え済（新 PID 1341374、`/login` 200 OK 確認）
+
+**実機聴感（差し替え直後 2026-06-11）**: 声の調子が安定し、違和感も少ないことをユーザー確認済。新 UUID を継続採用。
+
+**残課題**: 長時間走行時の挙動は次回試走で再確認。問題があれば旧 UUID へロールバック可能（差分は1行）。Aivis 音声モデルの独自化（§8 低優先）は別途継続。
+
 ### 2026-06-08: プロダクト方針見直し（自転車専用 → 汎用モビリティへ・検討中）
 
 第2回耐久テスト後の振り返りで、自転車専用ナビとして前面に出すリスクを再認識:
@@ -362,7 +377,7 @@ ElevenLabs vs Aivis は ElevenLabs の方が円滑だが、定額運用しやす
 - `.env.local` に `AIVIS_CLOUD_API_TOKEN` を追加（Premium プラン定額、RPM 10）
 - `src/lib/characters.ts`: `voicevoxSpeakerId` を削除し `aivisModelUuid` に置換
   - みさき: `e9339137-2ae3-4d41-9394-fb757a7e61e6`
-  - ひより: `734c12b6-eaf2-4dbd-8596-8663c72d2afa`
+  - ひより: `734c12b6-eaf2-4dbd-8596-8663c72d2afa` ← 2026-06-11 に `a670e6b8-0852-45b2-8704-1bc9862f2fe6` へ差し替え（音声安定性の改善目的）
   - ※研究開発用モデル。実用化時は独自モデル作成予定
 - `src/app/api/tts/route.ts`: `synthesizeVoicevox` を削除し `synthesizeAivis` を実装
   - エンドポイント: `POST https://api.aivis-project.com/v1/tts/synthesize`
