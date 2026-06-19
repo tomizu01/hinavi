@@ -4,6 +4,7 @@ import { getSession } from '@/lib/session';
 import { CHARACTERS } from '@/lib/characters';
 import { loadCharacterPrompt, loadKaiwaPrompt } from '@/lib/prompts';
 import { pool } from '@/lib/db';
+import { formatDistance } from '@/lib/distance';
 import type { ConversationLine, ConversationMode, GenerateRequest, Spot } from '@/lib/types';
 
 const DEFAULT_USER_NAME = 'あなた';
@@ -54,6 +55,10 @@ function buildPrompt(
     const continuationNote = body.isSpotContinuation
       ? '現在、以下のスポット情報について会話を継続中です。'
       : '話題にするスポットの情報が変更されました。下記のスポットを話題にして新規に会話してください。';
+    const distanceLine =
+      typeof body.distanceMeters === 'number' && Number.isFinite(body.distanceMeters)
+        ? `\n- 距離: ${formatDistance(body.distanceMeters)}（会話で距離に言及する場合は必ずこの表現をそのまま使用。「近く」「あと少し」等の曖昧表現は禁止）`
+        : '';
     contextSection = `
 ## 会話継続状況
 ${continuationNote}
@@ -61,7 +66,7 @@ ${continuationNote}
 ## 話題にするスポット
 - 名称: ${body.spot.name}
 - 位置: 緯度 ${body.spot.lat.toFixed(5)}, 経度 ${body.spot.lng.toFixed(5)}
-- カテゴリ: ${body.spot.types.join(', ')}`;
+- カテゴリ: ${body.spot.types.join(', ')}${distanceLine}`;
   } else if (body.mode === 'time') {
     contextSection = `
 ## 現在時刻
@@ -180,6 +185,7 @@ function validBody(b: unknown): b is GenerateRequest {
   if (typeof r.sessionId !== 'string') return false;
   if (!Array.isArray(r.history)) return false;
   if (r.mode === 'spot' && (!r.spot || typeof r.spot !== 'object')) return false;
+  if (r.distanceMeters !== undefined && typeof r.distanceMeters !== 'number') return false;
   return true;
 }
 

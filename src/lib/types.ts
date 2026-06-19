@@ -25,6 +25,7 @@ export interface GenerateRequest {
   history: ConversationLine[];
   spot?: Spot;
   isSpotContinuation?: boolean;
+  distanceMeters?: number;
 }
 
 export interface GenerateResponse {

@@ -36,7 +36,7 @@ export default function LoginPage() {
   return (
     <main className="min-h-dvh flex items-center justify-center bg-neutral-900 text-neutral-100 px-4">
       <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 bg-neutral-800 rounded-2xl p-6 shadow-xl">
-        <h1 className="text-xl font-semibold text-center">hinavi ログイン</h1>
+        <h1 className="text-xl font-semibold text-center">旅コト ログイン</h1>
         <label className="block">
           <span className="block text-sm mb-1">ユーザー名</span>
           <input

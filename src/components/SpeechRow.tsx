@@ -16,9 +16,9 @@ export default function SpeechRow({ speaker, text, side }: Props) {
     <Image
       src={char.imagePath}
       alt={char.displayName}
-      width={80}
-      height={67}
-      sizes="80px"
+      width={70}
+      height={81}
+      sizes="70px"
       className="shrink-0 self-end rounded-lg"
       priority
     />

@@ -120,7 +120,7 @@ export default function MainPage() {
     return (
       <main className="min-h-dvh flex items-center justify-center bg-neutral-950 text-neutral-100 px-4">
         <div className="text-center space-y-6 max-w-sm">
-          <h1 className="text-2xl font-bold">hinavi</h1>
+          <h1 className="text-2xl font-bold">旅コト</h1>
           <p className="text-sm text-neutral-300">
             自転車走行中のスマホ操作は法令で禁止されています。
             開始ボタンを押すと位置情報・画面常時点灯・音声再生が有効になります。

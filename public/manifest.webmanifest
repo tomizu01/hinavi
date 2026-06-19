@@ -1,7 +1,7 @@
 {
-  "name": "hinavi",
-  "short_name": "hinavi",
-  "description": "自転車用 観光・飲食ガイド",
+  "name": "旅コト",
+  "short_name": "旅コト",
+  "description": "AI観光・飲食ガイド",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

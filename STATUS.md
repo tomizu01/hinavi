@@ -1,16 +1,21 @@
-# hinavi 開発状況
+# 旅コト（旧 hinavi）開発状況
 
-最終更新: 2026-06-19（休憩モード→雑談モードに転換。`topics` テーブル新設、`kaiwa2.md` の `{current_topic}` にランダム話題を注入。汎用観光案内アプリへの転換に伴い、プロンプトから「走行中」表現を削除）
+最終更新: 2026-06-19（汎用観光案内アプリへの転換に伴う一連の改修: 休憩モード→雑談モード化 + topics テーブル新設、スポット会話への距離注入（曖昧表現禁止）、画像素材差し替え、アプリ表示名を「旅コト」に変更、`osm_places_compare` を次回耐久テストに向けてクリア）
+
+> ※ プロジェクトディレクトリ・本番URL・GitHub 上のリポジトリ名・DB 名・cookie 名等の **内部識別子は引き続き `hinavi`**。アプリの **表示名のみ「旅コト」** に変更している。
 
 ## 1. 概要
 
-自転車用 観光・飲食ガイド PWA。Android Chrome 向け。
+AI 観光・飲食ガイド PWA。Android Chrome 向け。移動手段は問わない汎用設計（電車・車・徒歩・自転車）。
 要件は `REQUIREMENTS.md` 参照。
+
+**当初は自転車専用ナビとして設計**したが、第2回耐久テスト (2026-06-07) 後の振り返りで「自転車運転中のスマホ操作は道交法違反（2024年11月改正で罰則強化）」という社会的リスクを再認識し、2026-06-08 に「移動手段を問わない汎用音声コンパニオン」へ方針転換。プロンプト・モード設計・アプリ名・PWA メタデータ等を順次汎用化中（§11 の 2026-06-08 / 2026-06-19 エントリ参照）。
 
 ## 2. 動作状況
 
 - **本番URL**: `https://hinavi.mediowl.ai` (ALB + ACM 経由、ALB → EC2 6500 ポートにフォワード)
 - **PWA インストール確認済み**（Android Chrome でホーム画面追加成功）
+- **PWA 表示名**: `旅コト`（`public/manifest.webmanifest` の `name` / `short_name`）。**ホーム画面追加済端末は再インストールしないとラベル更新されない** (Android Chrome 仕様)
 - 起動中プロセス: `next start -p 6500`（`/var/www/hinavi/` で起動）
 - ログ: `/var/log/hinavi/server-YYYYMMDD-HHMMSS.log`（起動毎にタイムスタンプ付きで永続化）
 
@@ -24,7 +29,8 @@
 ├── next.config.ts
 ├── tsconfig.json
 ├── .env.local                 機密(DB/API キー類) — git管理外
-├── sql/schema.sql             users / conversations / osm_places_compare / topics テーブル
+├── sql/schema.sql             users / conversations / osm_places_compare / topics テーブル定義
+├── docs/                      ベンダー API リファレンス等の参考資料
 ├── scripts/create-user.mjs    bcrypt ユーザー作成スクリプト
 ├── prompts/
 │   ├── characters/
@@ -50,8 +56,8 @@
     │   └── api/
     │       ├── auth/login/route.ts
     │       ├── auth/logout/route.ts
-    │       ├── places/nearby/route.ts   OSM (Overpass) 5km → 0件なら Google Places 2km フォールバック、両者を osm_places_compare に記録
-    │       ├── generate/route.ts        Gemini 3.1 Flash Lite + responseSchema で {misaki, hiyori} JSON 出力
+    │       ├── places/nearby/route.ts   OSM 2km → 0件なら OSM 5km → 0件なら Google Places 2km の3段直列フォールバック、`osm_places_compare` に記録
+    │       ├── generate/route.ts        Gemini 3.1 Flash Lite + responseSchema で {misaki, hiyori} JSON 出力。rest モードで `topics` から話題注入、spot モードで `distance.ts` 整形済距離を注入
     │       └── tts/route.ts             Aivis / ElevenLabs 分岐。送信直前に tts-readings の置換を適用
     ├── components/
     │   ├── MapView.tsx          Leaflet + 地理院タイル(pale) + 現在地 circleMarker
@@ -64,6 +70,7 @@
         ├── characters.ts      みさき/ひより の定義 (aivisModelUuid, elevenLabsVoiceId, promptPath)
         ├── prompts.ts         loadCharacterPrompt / loadKaiwaPrompt（ファイル単位メモリキャッシュ）
         ├── osm.ts             Overpass API クライアント。観光・歴史・飲食・公園・宿泊・駅・温泉・湧水・山頂等を取得、最大100件サンプル
+        ├── distance.ts        スポット距離の表示整形（<1km は 100m 単位「約N00m」、≧1km は 0.1km 単位「約N.Nkm」）
         ├── tts-readings.ts    TTS 読み間違い対策の強制置換辞書（送信直前に適用、画面表示は無変更）
         ├── types.ts           ConversationMode = 'spot' | 'rest' | 'time' などを定義
         └── client/
@@ -154,6 +161,7 @@ mysql -u ai -p hinavi
   - 各ターン 2 行（misaki, hiyori）を `conversations` テーブルに `mode` 付きで保存
 - **ユーザー呼称**: `prompts/**/*.md` 内の `{user_name}` を `users.display_name` で置換（NULL/空時は `'あなた'` フォールバック）。現状の `misaki.md` / `hiyori.md` / `kaiwa*.md` に placeholder は無いが、機能は維持
 - **雑談話題**: `kaiwa2.md` の `{current_topic}` を `topics` テーブルから `ORDER BY RAND() LIMIT 1` で選択して置換。`rest` モード時のみ実行。`topics.is_active = 1` のレコードが対象
+- **スポット距離注入**: `src/lib/distance.ts` の `formatDistance()` で整形（< 1km は 100m 単位四捨五入で「約N00m」、≧ 1km は 0.1km 単位で「約N.Nkm」、最小 100m）。client (`conversationLoop.ts`) はターン毎に最新 GPS とスポット間の haversine 距離を計算し `distanceMeters` として `/api/generate` に送付。サーバ側でスポットコンテキストに「距離: 約XXX（…曖昧表現禁止）」として注入。`kaiwa1.md` にも距離表現ルールを明記
 - **スポット取得**: `src/app/api/places/nearby/route.ts`
   - **3段直列フォールバック**: OSM 2km → 0件なら OSM 5km → 0件なら Google Places 2km
   - 都会では 2km で十分ヒットして遠目のスポットを拾わない、田舎では 5km/Places で救済する設計
@@ -206,6 +214,10 @@ mysql -u ai -p hinavi
 | 低 | 観光的でない `primaryType` のフィルタ | OSM フォールバックの Places で `department_store` や `hotel` が混じることがある。会話に向くものを `primaryType` でさらに絞る |
 | 中 | OSM の name 必須要件を緩める | 第2回耐久テスト (2026-06-07) で Places フォールバック 17% 発生。市街地でも住宅地・幹線沿いで `name`/`name:ja` 付き POI が薄い区間がある。`tourism=*` / `historic=*` 系だけは name 無しでも採用すれば Places 依存を下げられる可能性 |
 | 低 | 会話プロンプトの微調整 | 第2回耐久テスト後の所感。「お互いに話しかけ合う」変更は機能しているがさらに磨ける余地あり |
+| 中 | 移動手段別のモード閾値最適化 | 汎用化方針 (2026-06-08) に伴う宿題。徒歩 1.5km再フェッチは過大、車 1.5kmは過小、電車は GPS が不安定。移動手段別に閾値を切り替える設計が必要 |
+| 中 | 距離注入の Gemini 遵守度確認 | 2026-06-19 で導入。曖昧表現禁止指示が効くかは試走で要確認。漏れた場合は kaiwa1.md の禁止語リストを追加 |
+| 低 | 雑談 topics の充実 | 現在 20 件。試走で「同じ話題が繰り返し当たる」感が出るようなら追加検討。SQL 直接 INSERT で増減可能 |
+| 低 | 内部識別子の汎用化 | アプリ名は「旅コト」に変更済だが、cookie 名 / localStorage キー / DB 名等は `hinavi` のまま。既存ユーザーへの影響と引き換えに揃えるか保留 |
 | 低 | 会話履歴／比較ログの整理 UI | `conversations`（mode 別ターン分布）と `osm_places_compare`（カバレッジ）の簡易ダッシュボードがあると便利 |
 | 低 | iOS/Safari 対応 | 仕様上スコープ外だが、Wake Lock 以外は動く可能性あり |
 | 低 | Aivis 音声モデルの独自化 | 現状は研究開発用モデル（みさき / ひより）。実用化時は独自モデルを作成予定 |
@@ -224,6 +236,100 @@ mysql -u ai -p hinavi
 - DNS: `hinavi.mediowl.ai` → ALB
 
 ## 11. 直近の作業ログ
+
+### 2026-06-19: 第3回耐久テストに向けた事前準備
+
+週末（晴天時）に第3回耐久テスト予定。確認ポイント:
+- OSM カテゴリ拡張 (2026-06-08) と 3 段直列フォールバック化 (2026-06-02) 後の `used_source` 分布（前回 6/07 実測: osm_2k 68% / osm_5k 16% / places 17%）
+- 雑談ターン化・距離注入・「お互いに話しかけ合う」プロンプト微調整の体感
+- 全般的な品質・コスト・バッテリーの再確認
+
+**事前準備**:
+- ✅ DB バックアップ済（ユーザー実施）
+- ✅ `osm_places_compare` をクリア（148 件 → 0 件）。次回試走分のみが記録される
+- `conversations` は意図的に温存（過去会話の履歴解析用）
+
+**事後集計クエリ例**（試走後にユーザー判断で実行）:
+```sql
+-- OSM/Places 段別の利用割合
+SELECT used_source, COUNT(*) AS n
+FROM osm_places_compare
+GROUP BY used_source
+ORDER BY n DESC;
+
+-- 段別の所要時間
+SELECT used_source, AVG(osm_ms) AS avg_osm_ms, AVG(places_ms) AS avg_places_ms
+FROM osm_places_compare
+GROUP BY used_source;
+
+-- 試走中のモード分布（今回 session の範囲を絞って）
+SELECT mode, COUNT(*)/2 AS turns
+FROM conversations
+WHERE created_at >= '2026-06-XX 00:00:00'  -- 試走開始日時 (UTC) に置換
+GROUP BY mode;
+```
+
+### 2026-06-19: アプリ表示名を「旅コト」へ変更
+
+PWA インストール時 / 起動画面 / ログイン画面の表示名を `hinavi` → `旅コト` に変更。
+
+**変更点**:
+- `public/manifest.webmanifest`: `name` / `short_name` を `hinavi` → `旅コト`、`description` を `自転車用 観光・飲食ガイド` → `AI観光・飲食ガイド`
+- `src/app/layout.tsx`: `metadata.title` / `appleWebApp.title` を `hinavi` → `旅コト`
+- `src/app/page.tsx`: 開始画面の `<h1>` を `hinavi` → `旅コト`
+- `src/app/login/page.tsx`: `<h1>` を `hinavi ログイン` → `旅コト ログイン`
+- `public/sw.js`: `CACHE_NAME` を `hinavi-v7` → `hinavi-v8` にバンプ（manifest 変更を確実に取り込ませるため）
+
+**触っていない箇所（内部識別子。変更すると既存ユーザーに影響）**:
+- `src/lib/session.ts` `cookieName: 'hinavi_session'` — 変更すると既存セッションが切れる
+- `src/lib/client/settings.ts` `TTS_ENGINE_KEY = 'hinavi.ttsEngine'` — 変更すると TTS エンジン設定がリセット
+- `src/lib/osm.ts` Overpass User-Agent — 第三者通信用、見えない
+- `src/lib/db.ts` `__hinavi_pool` グローバル — 完全に内部
+
+**PWA インストール済端末の挙動**:
+- 既にホーム画面に追加済のアイコンは **ラベルが自動更新されない**（Android Chrome 仕様）。新名称を反映するには再インストール（一度削除→ホーム画面追加）が必要
+- 新規インストール時は manifest 通り「旅コト」で表示される
+
+**ステータス**:
+- ✅ 本番ビルド OK
+- ⏳ 本番反映後、新規 PWA インストールで表示確認
+
+### 2026-06-19: 画像素材差し替え（みさき / ひより / PWA アイコン）
+
+新キャラ画像は縦長（520×600）、PWA アイコンは 512×512。素材は `/home/ec2-user/sozai/` から `public/` 配下にコピー。
+
+**変更点**:
+- `public/characters/misaki.png`, `public/characters/hiyori.png` を新素材で上書き（旧 500×417 横長 → 新 520×600 縦長）
+- `public/icon-512.png` を新 PWA アイコン (`tabikoto_pwa_icon.png`) で上書き
+- `src/components/SpeechRow.tsx`: `<Image>` を `width=80 height=67` から `width=70 height=81` へ変更（縦長アスペクト比 520:600 ≒ 70:81 に合わせる）
+- `public/sw.js`: `CACHE_NAME` を `hinavi-v6` → `hinavi-v7` にバンプ。これで古いキャラ画像 / 旧アイコンキャッシュが activate 時に破棄される
+
+**ステータス**:
+- ✅ 本番ビルド OK
+- ⏳ 本番反映後、PWA インストール済端末は SW の更新検知（次回起動 or 数十分以内）で新キャッシュへ切り替わる
+- ⏳ 実機での見た目確認（バブルとの高さバランス、`items-end` での揃え方）
+
+### 2026-06-19: スポット会話に距離注入（曖昧表現禁止）
+
+OSM フォールバックで最大 5km 先のスポットが選ばれることがあり、Gemini が「近くに」「あと少しで」と一律に表現してしまうため、距離を明示的に渡して曖昧表現を禁止。
+
+**変更点**:
+- `src/lib/distance.ts` 新規。`formatDistance(meters)` を提供
+  - `< 1000m`: 100m 単位で四捨五入し「約N00m」（最小 100m）
+  - `≧ 1000m`: 0.1km 単位で「約N.Nkm」
+  - 境界 950m → 「約1.0km」、4,999m → 「約5.0km」、5,050m → 「約5.1km」
+- `src/lib/types.ts` `GenerateRequest` に `distanceMeters?: number` を追加
+- `src/lib/client/conversationLoop.ts`: spot ターン毎に `haversineMeters(pos, spot)` を計算し `distanceMeters` を同送。継続ターンでも毎回再計算（移動中に距離が縮むので)
+- `src/app/api/generate/route.ts`:
+  - `validBody` で `distanceMeters` を任意 number として受理
+  - spot コンテキストに `- 距離: 約N00m（…「近く」「あと少し」等の曖昧表現は禁止）` の行を追記
+- `prompts/kaiwa/kaiwa1.md`: 距離表現ルールを明記（「与えられた距離をそのまま使う」「『近くに』『あと少しで』『もうすぐ』は禁止」「例：『ここから約500mで〇〇があります』」）
+
+**ステータス**:
+- ✅ 型チェック / 本番ビルド OK
+- ✅ formatDistance のエッジケース検証済（30/100/149/150/450/949/950/999/1000/1450/2500/4999/5050m）
+- ⏳ 本番反映（再起動）はユーザー判断
+- ⏳ 実機での距離表現確認（Gemini が指示に従うかは要検証。従わない場合は kaiwa1.md の禁止表現リストを増やす）
 
 ### 2026-06-19: 休憩モード→雑談モードへ転換（topics テーブル新設）
 

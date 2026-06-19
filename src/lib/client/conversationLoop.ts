@@ -38,6 +38,7 @@ interface GenerateBody {
   history: ConversationLine[];
   spot?: Spot;
   isSpotContinuation?: boolean;
+  distanceMeters?: number;
 }
 
 function computeMode(turnNo: number): ConversationMode {
@@ -247,6 +248,10 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         cb.onSpotChange(spotForTurn);
       }
 
+      const distanceMeters = spotForTurn
+        ? haversineMeters(pos, { lat: spotForTurn.lat, lng: spotForTurn.lng })
+        : undefined;
+
       let pair: GenerateResponse;
       try {
         pair = await generatePair({
@@ -256,6 +261,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
           history: filterHistory(history),
           spot: spotForTurn,
           isSpotContinuation,
+          distanceMeters,
         });
         netFails = 0;
       } catch (err) {

@@ -3,7 +3,7 @@ import SwRegister from '@/components/SwRegister';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'hinavi',
+  title: '旅コト',
   description: 'AI観光・飲食ガイド',
   manifest: '/manifest.webmanifest',
   icons: {
@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   },
   appleWebApp: {
     capable: true,
-    title: 'hinavi',
+    title: '旅コト',
     statusBarStyle: 'black-translucent',
   },
 };
