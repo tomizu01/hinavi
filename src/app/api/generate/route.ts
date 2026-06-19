@@ -38,8 +38,11 @@ function buildPrompt(
   characterPrompts: { misaki: string; hiyori: string },
   kaiwaPrompt: string,
   userName: string,
+  currentTopic: string,
 ): string {
   const fillUser = (s: string) => s.replaceAll('{user_name}', userName);
+  const fillTopic = (s: string) => s.replaceAll('{current_topic}', currentTopic);
+  const fillAll = (s: string) => fillTopic(fillUser(s));
 
   const recentHistory = body.history.slice(-HISTORY_MAX).map((h) => {
     const name = CHARACTERS[h.speaker].displayName;
@@ -72,7 +75,7 @@ ${fillUser(characterPrompts.misaki)}
 ${fillUser(characterPrompts.hiyori)}
 
 # 会話シーン指示
-${fillUser(kaiwaPrompt)}
+${fillAll(kaiwaPrompt)}
 ${contextSection}
 
 # これまでの会話（直近${HISTORY_MAX}件）
@@ -132,6 +135,14 @@ async function callGeminiWithRetry(apiKey: string, prompt: string): Promise<Gene
     console.warn('gemini call failed, retrying once:', err);
     return await callGeminiOnce(apiKey, prompt);
   }
+}
+
+async function pickRandomTopic(): Promise<string> {
+  const [rows] = await pool.execute<RowDataPacket[]>(
+    'SELECT topic FROM topics WHERE is_active = 1 ORDER BY RAND() LIMIT 1',
+  );
+  const t = rows[0]?.topic;
+  return typeof t === 'string' && t.trim().length > 0 ? t.trim() : '最近ハマってること';
 }
 
 async function insertConversation(
@@ -203,11 +214,22 @@ export async function POST(req: Request) {
     console.error('display_name fetch failed:', err);
   }
 
+  let currentTopic = '';
+  if (req2.mode === 'rest') {
+    try {
+      currentTopic = await pickRandomTopic();
+    } catch (err) {
+      console.error('topic fetch failed:', err);
+      currentTopic = '最近ハマってること';
+    }
+  }
+
   const prompt = buildPrompt(
     req2,
     { misaki: misakiPrompt, hiyori: hiyoriPrompt },
     kaiwaPrompt,
     userName,
+    currentTopic,
   );
 
   let pair: GeneratedPair;

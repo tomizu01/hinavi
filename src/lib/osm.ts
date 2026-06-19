@@ -1,7 +1,7 @@
 import type { Spot } from './types';
 
 const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
-const USER_AGENT = 'hinavi/0.1 (cycling navigation PWA)';
+const USER_AGENT = 'hinavi/0.1 (AI tourism guidance PWA)';
 
 interface OverpassElement {
   type: 'node' | 'way' | 'relation';

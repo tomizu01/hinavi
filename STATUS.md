@@ -1,6 +1,6 @@
 # hinavi 開発状況
 
-最終更新: 2026-06-11（ひよりの Aivis モデルを `a670e6b8-...` に差し替え。音声安定性の改善を目的）
+最終更新: 2026-06-19（休憩モード→雑談モードに転換。`topics` テーブル新設、`kaiwa2.md` の `{current_topic}` にランダム話題を注入。汎用観光案内アプリへの転換に伴い、プロンプトから「走行中」表現を削除）
 
 ## 1. 概要
 
@@ -24,7 +24,7 @@
 ├── next.config.ts
 ├── tsconfig.json
 ├── .env.local                 機密(DB/API キー類) — git管理外
-├── sql/schema.sql             users / conversations / osm_places_compare テーブル
+├── sql/schema.sql             users / conversations / osm_places_compare / topics テーブル
 ├── scripts/create-user.mjs    bcrypt ユーザー作成スクリプト
 ├── prompts/
 │   ├── characters/
@@ -32,7 +32,7 @@
 │   │   └── hiyori.md          盛り上げ役 ひより・キャラ設定 (Aivis model a670e6b8... / ElevenLabs OSwaPSNdfituxkWcjlkR)
 │   └── kaiwa/
 │       ├── kaiwa1.md          スポットモード用シーン指示
-│       ├── kaiwa2.md          休憩モード用シーン指示（6 ターン毎）
+│       ├── kaiwa2.md          雑談モード用シーン指示（6 ターン毎、{current_topic} に topics から1件ランダム注入）
 │       └── kaiwa3.md          時間モード用シーン指示（30 ターン毎）
 ├── public/
 │   ├── manifest.webmanifest
@@ -140,7 +140,7 @@ mysql -u ai -p hinavi
   - ターン定義: みさき・ひより が 1回ずつ発言する 1往復 = 1ターン（`turnNo` は両話者に同じ番号で渡る）
   - **モード判定**（優先度: 時間 > 休憩 > スポット）:
     - `turnNo % 30 === 0` → 時間モード（kaiwa3.md、サーバで JST 現在時刻を注入）
-    - `turnNo % 6 === 0` → 休憩モード（kaiwa2.md）
+    - `turnNo % 6 === 0` → 雑談モード（kaiwa2.md、`topics` から1件ランダム選択して `{current_topic}` に注入。スポット情報は使わない）
     - それ以外 → スポットモード（kaiwa1.md）
   - **再フェッチ**: GPS 1.5km 移動毎に Places/OSM 再取得（スポットモード時のみ）
   - **スポット継続**: 同一スポットで最低 2 ターン継続。継続時はプロンプトに「会話継続中」、切替時は「スポット変更」の注意書きを注入
@@ -153,6 +153,7 @@ mysql -u ai -p hinavi
   - **失敗時**: HTTP/タイムアウト/JSON 不正のいずれも 1 回リトライ。2 回失敗で 502
   - 各ターン 2 行（misaki, hiyori）を `conversations` テーブルに `mode` 付きで保存
 - **ユーザー呼称**: `prompts/**/*.md` 内の `{user_name}` を `users.display_name` で置換（NULL/空時は `'あなた'` フォールバック）。現状の `misaki.md` / `hiyori.md` / `kaiwa*.md` に placeholder は無いが、機能は維持
+- **雑談話題**: `kaiwa2.md` の `{current_topic}` を `topics` テーブルから `ORDER BY RAND() LIMIT 1` で選択して置換。`rest` モード時のみ実行。`topics.is_active = 1` のレコードが対象
 - **スポット取得**: `src/app/api/places/nearby/route.ts`
   - **3段直列フォールバック**: OSM 2km → 0件なら OSM 5km → 0件なら Google Places 2km
   - 都会では 2km で十分ヒットして遠目のスポットを拾わない、田舎では 5km/Places で救済する設計
@@ -223,6 +224,38 @@ mysql -u ai -p hinavi
 - DNS: `hinavi.mediowl.ai` → ALB
 
 ## 11. 直近の作業ログ
+
+### 2026-06-19: 休憩モード→雑談モードへ転換（topics テーブル新設）
+
+汎用観光案内アプリへの方針転換（§11 の 2026-06-08 エントリ参照）に合わせ、`turnNo % 6` の「休憩モード」を「雑談モード」に再設計。
+
+**目的**: 「自転車休憩」を前提とした文言を排除し、移動手段を問わず違和感のない雑談ターンにする。
+
+**変更点**:
+- `sql/schema.sql` に `topics` テーブル新設（`id, topic, is_active, created_at`）+ 初期 20 トピック投入（「最近ハマってる飲み物」「行ってみたい旅行先」「100万円もらえたら何に使う？」等）
+- `prompts/kaiwa/kaiwa2.md`: ユーザー手動で「雑談タイム」用の指示に書き換え済。`{current_topic}` placeholder で話題を埋め込む方式
+- `src/app/api/generate/route.ts`:
+  - `pickRandomTopic()` を新設。`SELECT topic FROM topics WHERE is_active = 1 ORDER BY RAND() LIMIT 1`
+  - `req2.mode === 'rest'` のときのみ topic を取得し、`buildPrompt` の `fillTopic` で `{current_topic}` を置換
+  - DB エラー時のフォールバックは「最近ハマってること」
+- `prompts/characters/misaki.md`: 「走行中に耳で聞ける長さ」→「移動中に耳で聞ける長さ」に変更（汎用化）
+- `prompts/characters/{misaki,hiyori}.md` / `prompts/kaiwa/kaiwa1.md` / `prompts/kaiwa/kaiwa2.md` / `prompts/kaiwa/kaiwa3.md` のシーン指示は「旅行中」前提に書き換え済（ユーザー手動編集）
+
+**運用上のメモ**:
+- topics は SQL 直接編集で増減可能。`UPDATE topics SET is_active = 0 WHERE id = ?` で論理削除
+- 1回の rest ターン = 2発話（みさき/ひより）= 1話題で完結する想定。連続 rest ターンは無いので「同じ話題が続く」現象は基本起きない
+- 履歴 5 件には引きずられるので、直前の rest 話題は次の rest までに高確率で履歴から押し出される
+
+**ステータス**:
+- ✅ 型チェック OK (`npx tsc --noEmit` 通過)
+- ✅ topics テーブル投入済（本番 hinavi DB、20 件 INSERT 済）
+- ⏳ 本番反映（再起動）はユーザー判断。手順は §6 「再起動」参照
+- ⏳ 実機での雑談ターン動作確認
+
+**プロンプト外の自転車表現も追って更新**（汎用観光案内アプリ化に合わせて、ユーザー指示で書き換え）:
+- `src/app/layout.tsx:7` `description: 'AI観光・飲食ガイド'`（PWA メタデータ、旧「自転車用 観光・飲食ガイド」）
+- `src/app/page.tsx:125` 「自転車走行中のスマホ操作は法令で禁止されています。」（旧「走行中はスマホ画面を見ない・操作しない運用を前提としています。」。道交法改正への注意喚起へ表現を寄せた）
+- `src/lib/osm.ts:4` Overpass User-Agent `hinavi/0.1 (AI tourism guidance PWA)`（旧 `cycling navigation PWA`）
 
 ### 2026-06-11: ひよりの Aivis モデル UUID を差し替え
 

@@ -122,7 +122,7 @@ export default function MainPage() {
         <div className="text-center space-y-6 max-w-sm">
           <h1 className="text-2xl font-bold">hinavi</h1>
           <p className="text-sm text-neutral-300">
-            走行中はスマホ画面を見ない・操作しない運用を前提としています。
+            自転車走行中のスマホ操作は法令で禁止されています。
             開始ボタンを押すと位置情報・画面常時点灯・音声再生が有効になります。
           </p>
           <button

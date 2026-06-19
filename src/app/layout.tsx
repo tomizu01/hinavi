@@ -4,7 +4,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'hinavi',
-  description: '自転車用 観光・飲食ガイド',
+  description: 'AI観光・飲食ガイド',
   manifest: '/manifest.webmanifest',
   icons: {
     icon: '/icon-512.png',
