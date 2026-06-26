@@ -984,9 +984,11 @@ cd /var/www/hinavi && npm run -w apps/account start   # port 6501
 - [ ] `accounts` / `verification_tokens` 追加
 - [ ] `conversations.user_id` の型変更（INT → TEXT）
 
-#### Phase 6: 仕様書 & systemd
-- [ ] `docs/auth-integration.md`（freetalk 開発者向け）
-- [ ] `deploy/systemd/hinavi-{account,tabikoto}.service` 雛形
+#### Phase 6: 仕様書 & systemd [完了 2026-06-26]
+- [x] `docs/auth-integration.md` — freetalk 開発者へそのまま渡せる仕様書（JWT スペック / JWKS / Node・Python サンプル / ログイン誘導 / ログアウト / トラブルシュート / 連絡先）
+- [x] `deploy/systemd/hinavi-tabikoto.service` — port 6500 用 unit（User=ec2-user, Restart=always, ログ `/var/log/hinavi/tabikoto.log`）
+- [x] `deploy/systemd/hinavi-account.service` — port 6501 用 unit
+- [x] `deploy/systemd/README.md` — インストール / 運用コマンド / 注意点
 
 #### Phase 7: 本番化（後日、本番サーバ構築後）
 - [ ] 本番 RS256 鍵生成
