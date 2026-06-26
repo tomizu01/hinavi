@@ -1,18 +1,25 @@
 # dependencies
+node_modules/
 /node_modules
 
-# next.js
-/.next/
-/out/
+# next.js (per-app)
+apps/*/.next/
+apps/*/out/
+.next/
 
 # misc
 .DS_Store
 *.pem
 tsconfig.tsbuildinfo
+apps/*/tsconfig.tsbuildinfo
 
 # env
 .env*.local
 .env
+
+# keys (RS256)
+keys/*.pem
+keys/*.key
 
 # logs
 npm-debug.log*

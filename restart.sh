@@ -3,18 +3,15 @@ set -e
 
 cd "$(dirname "$0")"
 
-# ポート6500のプロセスを停止（ss で検出）
+# port 6500 (tabikoto) を停止
 PID=$(ss -tlnp | grep ':6500 ' | grep -oP 'pid=\K[0-9]+' || true)
 if [ -n "$PID" ]; then
-  echo "Stopping process on port 6500 (PID: $PID)..."
-  kill "$PID"
+  echo "Stopping tabikoto on port 6500 (PID: $PID)..."
+  kill "$PID" || true
   for i in $(seq 1 20); do
-    if ! ss -tlnp | grep -q ':6500 '; then
-      break
-    fi
+    ss -tlnp | grep -q ':6500 ' || break
     sleep 0.5
   done
-  # まだ残っていれば強制終了
   PID=$(ss -tlnp | grep ':6500 ' | grep -oP 'pid=\K[0-9]+' || true)
   if [ -n "$PID" ]; then
     echo "Force killing PID: $PID..."
@@ -23,9 +20,11 @@ if [ -n "$PID" ]; then
   fi
 fi
 
-echo "Building..."
-npm run build
+echo "Building tabikoto..."
+npm run build:tabikoto
 
-echo "Starting production server..."
+echo "Starting tabikoto..."
 LOGFILE="/var/log/hinavi/server-$(date +%Y%m%d-%H%M%S).log"
-nohup npm run start > "$LOGFILE" 2>&1 &
+nohup npm run start:tabikoto > "$LOGFILE" 2>&1 &
+disown
+echo "log: $LOGFILE"

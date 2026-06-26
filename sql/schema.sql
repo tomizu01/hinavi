@@ -1,20 +1,75 @@
--- hinavi schema
--- mysql -u ai -p hinavi < sql/schema.sql
+-- hinavi schema (旅コト + misahina account)
+-- 2026-06-26 SaaS化に伴い Auth.js v5 標準スキーマへ移行
+-- セッションは JWT (RS256) のため `sessions` テーブルは不要
+--
+-- フレッシュインストール:
+--   mysql -u ai -p hinavi < sql/schema.sql
+--
+-- ※ 既存データは DROP TABLE で全削除される
 
-CREATE TABLE IF NOT EXISTS users (
-  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  username     VARCHAR(64) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
-  display_name VARCHAR(64) DEFAULT NULL,
-  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+SET FOREIGN_KEY_CHECKS = 0;
+
+DROP TABLE IF EXISTS osm_places_compare;
+DROP TABLE IF EXISTS conversations;
+DROP TABLE IF EXISTS topics;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS verification_tokens;
+DROP TABLE IF EXISTS users;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+-- ============================================================
+-- Auth.js 標準テーブル
+-- ============================================================
+
+-- users: account.misahina.com が発行するユーザー。id は UUID v4
+CREATE TABLE users (
+  id              VARCHAR(36) PRIMARY KEY,
+  name            VARCHAR(255) DEFAULT NULL,
+  email           VARCHAR(255) NOT NULL UNIQUE,
+  email_verified  TIMESTAMP NULL DEFAULT NULL,
+  image           TEXT DEFAULT NULL,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 既存環境向け（display_name 後付け用。未適用なら手動実行）:
--- ALTER TABLE users ADD COLUMN display_name VARCHAR(64) DEFAULT NULL AFTER password_hash;
+-- accounts: OAuth プロバイダごとの紐付け (Google / Apple) と Magic Link
+CREATE TABLE accounts (
+  id                   VARCHAR(36) PRIMARY KEY,
+  user_id              VARCHAR(36) NOT NULL,
+  type                 VARCHAR(16) NOT NULL,    -- 'oauth' | 'oidc' | 'email' | 'webauthn'
+  provider             VARCHAR(32) NOT NULL,    -- 'google' | 'apple' | 'email'
+  provider_account_id  VARCHAR(255) NOT NULL,
+  refresh_token        TEXT DEFAULT NULL,
+  access_token         TEXT DEFAULT NULL,
+  expires_at           BIGINT DEFAULT NULL,
+  token_type           VARCHAR(64) DEFAULT NULL,
+  scope                VARCHAR(255) DEFAULT NULL,
+  id_token             TEXT DEFAULT NULL,
+  session_state        TEXT DEFAULT NULL,
+  created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_provider_account (provider, provider_account_id),
+  INDEX idx_user (user_id),
+  CONSTRAINT fk_account_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS conversations (
+-- verification_tokens: Magic Link 用の使い捨てトークン (有効期限15分)
+CREATE TABLE verification_tokens (
+  identifier  VARCHAR(255) NOT NULL,
+  token       VARCHAR(255) NOT NULL,
+  expires     TIMESTAMP NOT NULL,
+  PRIMARY KEY (identifier, token),
+  INDEX idx_expires (expires)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 旅コト本体のテーブル
+-- ============================================================
+
+-- conversations: みさき/ひより 1発話 = 1行
+CREATE TABLE conversations (
   id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  user_id      INT UNSIGNED NOT NULL,
+  user_id      VARCHAR(36) NOT NULL,
   session_id   VARCHAR(64) NOT NULL,
   turn_no      INT UNSIGNED NOT NULL,
   mode         VARCHAR(16) DEFAULT NULL,
@@ -29,10 +84,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   CONSTRAINT fk_conv_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 既存環境向け（mode 後付け用。未適用なら手動実行）:
--- ALTER TABLE conversations ADD COLUMN mode VARCHAR(16) DEFAULT NULL AFTER turn_no;
-
-CREATE TABLE IF NOT EXISTS topics (
+-- topics: 雑談モードの話題候補
+CREATE TABLE topics (
   id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   topic      VARCHAR(255) NOT NULL,
   is_active  TINYINT(1) NOT NULL DEFAULT 1,
@@ -40,7 +93,6 @@ CREATE TABLE IF NOT EXISTS topics (
   INDEX idx_active (is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- topics 初期データ（雑談ターン用の話題候補）
 INSERT INTO topics (topic) VALUES
   ('最近ハマってる飲み物'),
   ('行ってみたい旅行先'),
@@ -63,9 +115,10 @@ INSERT INTO topics (topic) VALUES
   ('朝型か夜型か'),
   ('落ち込んだときの気分転換');
 
-CREATE TABLE IF NOT EXISTS osm_places_compare (
+-- osm_places_compare: スポット取得3段フォールバックの計測ログ
+CREATE TABLE osm_places_compare (
   id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  user_id       INT UNSIGNED NOT NULL,
+  user_id       VARCHAR(36) NOT NULL,
   session_id    VARCHAR(64) DEFAULT NULL,
   request_lat   DECIMAL(10, 7) NOT NULL,
   request_lng   DECIMAL(10, 7) NOT NULL,

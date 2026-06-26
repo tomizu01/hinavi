@@ -1,6 +1,6 @@
 # 旅コト（旧 hinavi）開発状況
 
-最終更新: 2026-06-19（汎用観光案内アプリへの転換に伴う一連の改修: 休憩モード→雑談モード化 + topics テーブル新設、スポット会話への距離注入（曖昧表現禁止）、画像素材差し替え、アプリ表示名を「旅コト」に変更、`osm_places_compare` を次回耐久テストに向けてクリア）
+最終更新: 2026-06-26（SaaS 化に向けた認証基盤移行計画策定 — Auth.js v5 + Google/Apple/Magic Link、RS256 JWT、monorepo 化 `apps/{account,tabikoto}`。§13 参照）
 
 > ※ プロジェクトディレクトリ・本番URL・GitHub 上のリポジトリ名・DB 名・cookie 名等の **内部識別子は引き続き `hinavi`**。アプリの **表示名のみ「旅コト」** に変更している。
 
@@ -733,4 +733,272 @@ Aivis 継続（品質 OK）。ElevenLabs は将来削除予定だが、当面は
 - `sql/schema.sql` … §12.9 (`conversations.mode` カラム追加、`osm_places_compare` 新設)
 - `prompts/` … §12.3 (ディレクトリ再構成、kaiwa*.md 新設)
 - `package.json` … §12.7 (`@googlemaps/js-api-loader` 削除 / `leaflet` 追加)
+
+## 13. 認証基盤移行計画 — SaaS 化に向けて [Phase 1 着手中, 策定 2026-06-26]
+
+### 13.0 背景と目的
+
+旅コトを SaaS として公開するにあたり、認証方式を刷新する。
+- 現状の **email + password (bcrypt + iron-session) を廃止**
+- 新方式は **Google ID / Apple Sign In / Email Magic Link** の3経路
+- 同時に **無料デモサイト（freetalk = みさき×ひよりのフリートーク, 別開発者・別リポジトリ）→ 旅コト本体** の動線を作るため、サブドメイン間で SSO を共有する
+
+### 13.1 アーキテクチャ（確定）
+
+```
+[本番]
+misahina.com                  LP（静的、後日構築）
+account.misahina.com          認証専用アプリ（Auth.js v5）
+tabikoto.misahina.com         旅コト本体（現 hinavi.mediowl.ai を移行）
+freetalk.misahina.com         無料デモ（別開発者・別リポジトリ）
+
+[開発]
+account.hinavi.mediowl.ai     port 6501 → ALB
+tabikoto.hinavi.mediowl.ai    port 6500 → ALB（現 hinavi.mediowl.ai を差し替え）
+```
+
+- **コードベース**: 本リポジトリ `/var/www/hinavi/` を **npm workspaces モノレポ化**。`apps/account/` と `apps/tabikoto/` の2アプリ + `packages/auth-jwt/` 共有ライブラリ。
+- **認証ライブラリ**: Auth.js v5 (`next-auth@5`)。Adapter は MySQL2 用の自前 adapter（既存の `lib/db.ts` 流用）。
+- **セッション**: **RS256 JWT**（DB セッション不使用）。Auth.js の `session.strategy = 'jwt'` に加え、自前の署名鍵を使う。
+- **cookie**: 名前 `__Secure-misahina.session`、`Domain=.misahina.com`（dev は `.hinavi.mediowl.ai`）、`Secure; HttpOnly; SameSite=Lax`。
+- **JWT 公開鍵配布**: `https://account.<domain>/.well-known/jwks.json`。tabikoto / freetalk はこれを fetch して検証（キャッシュは jose 標準の `createRemoteJWKSet` に任せる）。
+- **メール送信**: Amazon SES。dev 送信元 `noreply@hinavi.mediowl.ai`、prod 送信元 `noreply@misahina.com`（どちらも要 SES Verified Identity 登録）。
+- **DB**: 既存 `users` 破棄。Auth.js 標準テーブル `users` / `accounts` / `verification_tokens` を新設。`conversations.user_id` の型は再設計。
+
+### 13.2 JWT スペック（freetalk 開発者にも渡す仕様）
+
+| 項目 | 値 |
+|---|---|
+| アルゴリズム | **RS256** |
+| 公開鍵配布 | `https://account.misahina.com/.well-known/jwks.json` (dev: `https://account.hinavi.mediowl.ai/.well-known/jwks.json`) |
+| cookie 名 | `__Secure-misahina.session` |
+| cookie Domain | `.misahina.com` (prod) / `.hinavi.mediowl.ai` (dev) |
+| cookie 属性 | `Secure; HttpOnly; SameSite=Lax; Path=/` |
+| 有効期限 | 30 日（`exp` で表現、リフレッシュ無し。期限切れは再ログイン） |
+| 発行者 | `iss = "account.misahina.com"`（dev は `account.hinavi.mediowl.ai`） |
+| Audience | `aud = ["tabikoto.misahina.com", "freetalk.misahina.com"]`（dev は対応する `.hinavi.mediowl.ai`） |
+
+ペイロード:
+```json
+{
+  "sub": "<users.id (uuid v4)>",
+  "email": "user@example.com",
+  "email_verified": true,
+  "provider": "google" | "apple" | "email",
+  "name": "<users.display_name or null>",
+  "iat": 1735000000,
+  "exp": 1737592000,
+  "iss": "account.misahina.com",
+  "aud": ["tabikoto.misahina.com", "freetalk.misahina.com"]
+}
+```
+
+未ログイン時の動線:
+- 未ログイン → `https://account.<domain>/login?return=<encoded URL>` にリダイレクト
+- ログイン成功後 `return` URL に 302 で戻す（`return` は同一 eTLD+1 配下のみ許可、ホワイトリスト検証）
+
+ログアウト:
+- `https://account.<domain>/logout?return=<encoded URL>` を叩くと cookie を空文字 + `Max-Age=0` で上書き → 親ドメイン配下全アプリで一斉ログアウト
+
+検証側コード例（Node）:
+```ts
+import { jwtVerify, createRemoteJWKSet } from 'jose'
+const JWKS = createRemoteJWKSet(new URL('https://account.misahina.com/.well-known/jwks.json'))
+const { payload } = await jwtVerify(token, JWKS, {
+  issuer: 'account.misahina.com',
+  audience: 'freetalk.misahina.com',
+})
+```
+
+### 13.3 monorepo ディレクトリ構成（新）
+
+```
+/var/www/hinavi/
+├── package.json               npm workspaces ルート (private)
+├── apps/
+│   ├── account/               port 6501（Auth.js）
+│   │   ├── package.json
+│   │   ├── next.config.ts
+│   │   ├── src/
+│   │   │   ├── auth.ts        Auth.js 設定（providers, jwt callback で RS256 再署名）
+│   │   │   ├── app/
+│   │   │   │   ├── login/page.tsx       3ボタン + magic link メール送信フォーム
+│   │   │   │   ├── logout/route.ts      cookie クリア + return リダイレクト
+│   │   │   │   ├── api/auth/[...nextauth]/route.ts
+│   │   │   │   └── .well-known/jwks.json/route.ts
+│   │   │   └── lib/
+│   │   │       ├── db.ts
+│   │   │       ├── jwt.ts                JWT 発行（jose, RS256, .env から鍵読込）
+│   │   │       └── adapter-mysql.ts      Auth.js 用 MySQL adapter
+│   │   └── public/
+│   └── tabikoto/              port 6500（旅コト本体、現 src/ をここへ移動）
+│       └── ...（既存構造を維持）
+├── packages/
+│   └── auth-jwt/              JWT 検証ライブラリ（tabikoto / freetalk 用）
+│       ├── package.json
+│       └── src/index.ts       verifyMisahinaJwt(cookie, { audience }) を export
+├── keys/                      RS256 鍵（gitignore）
+│   ├── jwt-private-dev.pem
+│   └── jwt-public-dev.pem
+├── deploy/
+│   └── systemd/
+│       ├── hinavi-account.service
+│       └── hinavi-tabikoto.service
+├── docs/
+│   └── auth-integration.md    freetalk 開発者向け仕様書
+├── sql/schema.sql             users 再設計 + accounts + verification_tokens
+├── STATUS.md
+└── REQUIREMENTS.md
+```
+
+### 13.4 開発・本番運用
+
+**開発**: フォアグラウンド or `nohup` で2プロセス起動
+```bash
+# 旅コト
+cd /var/www/hinavi && npm run -w apps/tabikoto start  # port 6500
+# 認証
+cd /var/www/hinavi && npm run -w apps/account start   # port 6501
+```
+
+**本番**: systemd 2 unit に分割
+- `hinavi-account.service` (port 6501 想定 / 本番では 80→ALB 経由)
+- `hinavi-tabikoto.service` (port 6500)
+
+### 13.5 確定事項 (2026-06-26 ユーザー決定)
+
+| 項目 | 決定 |
+|---|---|
+| コードベース配置 | (a) **同一リポジトリでモノレポ化**（npm workspaces） |
+| マジックリンクメール | **Amazon SES**（他プロジェクトで実績あり） |
+| 既存 users | **全削除可**（DBバックアップ取得済） |
+| JWT アルゴリズム | **RS256 固定**（freetalk へ公開鍵で配布） |
+| ポート | account=6501 / tabikoto=6500 |
+| dev サブドメイン | `account.hinavi.mediowl.ai` / `tabikoto.hinavi.mediowl.ai` |
+| prod サブドメイン | `account.misahina.com` / `tabikoto.misahina.com` |
+| 本番サーバ | dev とは別サーバ（後日構築） |
+| ACM 証明書 | `*.hinavi.mediowl.ai` ワイルドカード（これから取得） |
+| 送信元（dev） | `noreply@hinavi.mediowl.ai`（これから SES Verified Identity 登録） |
+| 送信元（prod） | `noreply@misahina.com`（本番サーバ構築時に SES 登録） |
+
+### 13.6 ユーザー側 TODO（コードでは完結しないもの）
+
+実装と並行で進めていただきたい外部設定:
+
+- [ ] **Google Cloud Console → OAuth 2.0 Client ID 作成**
+  - 種類: Web Application
+  - 承認済リダイレクト URI（dev）: `https://account.hinavi.mediowl.ai/api/auth/callback/google`
+  - 承認済リダイレクト URI（prod）: `https://account.misahina.com/api/auth/callback/google`
+  - 取得値を `.env.local` に: `AUTH_GOOGLE_ID=` `AUTH_GOOGLE_SECRET=`
+
+- [ ] **Apple Developer Portal → Sign In with Apple 設定**
+  - App ID（または Service ID）を作成し Sign In with Apple を有効化
+  - Service ID identifier（例: `ai.mediowl.hinavi.account`）を作成し、Return URLs を登録
+    - dev: `https://account.hinavi.mediowl.ai/api/auth/callback/apple`
+    - prod: `https://account.misahina.com/api/auth/callback/apple`
+  - Sign In with Apple 用 Key (.p8) を作成し Key ID をメモ、ダウンロード
+  - 取得値を `.env.local` に: `AUTH_APPLE_ID=<Service ID>` `AUTH_APPLE_TEAM_ID=` `AUTH_APPLE_KEY_ID=` `AUTH_APPLE_PRIVATE_KEY=<.p8 内容を改行込で>`
+
+- [ ] **Amazon SES → Verified Identity 登録**
+  - dev: `noreply@hinavi.mediowl.ai`（DKIM/SPF 設定込）
+  - prod は本番サーバ構築時に `noreply@misahina.com` を追加
+  - サンドボックス状態なら本番アクセスへの移行申請（受信側ドメインも Verified にすれば dev のうちは申請不要でも回る）
+  - IAM ユーザー or インスタンスロールで `ses:SendEmail` 権限付与
+  - 取得値を `.env.local` に: `AWS_REGION=` `AWS_SES_FROM=noreply@hinavi.mediowl.ai`（IAM Key/Secret は他プロジェクト同様に設定）
+
+- [ ] **ACM ワイルドカード証明書発行**
+  - `*.hinavi.mediowl.ai`（DNS 検証、ap-northeast-1 リージョン or ALB と同じリージョン）
+  - 発行完了後 ALB リスナー (HTTPS:443) に追加証明書として紐付け
+
+- [ ] **DNS（Route53 等）**
+  - `account.hinavi.mediowl.ai` → ALB Alias
+  - `tabikoto.hinavi.mediowl.ai` → ALB Alias
+
+- [ ] **ALB リスナールール追加**
+  - Host header = `account.hinavi.mediowl.ai` → 新 target group (TCP 6501)
+  - Host header = `tabikoto.hinavi.mediowl.ai` → 既存 target group (TCP 6500)
+  - 既存 `hinavi.mediowl.ai` ルールは互換目的でしばらく残す（旧URL から `tabikoto.hinavi.mediowl.ai` への 301 でも可）
+
+- [ ] **RS256 鍵ペア生成**（dev 用、サーバ上で）
+  ```bash
+  cd /var/www/hinavi && mkdir -p keys && cd keys
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-private-dev.pem
+  openssl rsa -in jwt-private-dev.pem -pubout -out jwt-public-dev.pem
+  ```
+  本番鍵は本番サーバ構築時に同様に生成（dev とは別鍵）。
+
+### 13.7 Phase 別進捗
+
+#### Phase 1: 計画 & インフラ準備 [完了]
+- [x] 認証方式の決定（Google/Apple/Magic Link, Auth.js v5, RS256 JWT）
+- [x] STATUS.md §13 への計画記載
+- [x] RS256 dev 鍵生成（`keys/jwt-{private,public}-dev.pem`、private は 600 / 公開は 644、gitignore 済）
+- [ ] 残りの §13.6 TODO はユーザー側作業
+
+#### Phase 2: monorepo 化 [完了 2026-06-26]
+- [x] ルート `package.json` を workspaces 化（`apps/*` + `packages/*`）
+- [x] 現 `src/` `public/` `prompts/` `scripts/` `next.config.ts` `tsconfig.json` `next-env.d.ts` `postcss.config.mjs` `eslint.config.mjs` を `apps/tabikoto/` へ `git mv` で移動（履歴維持）
+- [x] `apps/tabikoto/package.json` → `@hinavi/tabikoto`, port 6500 で `npm run -w apps/tabikoto build && start` 動作確認
+- [x] `apps/account/` を Next.js 16.2.3 で初期化（port 6501）、skeleton ページ起動確認
+- [x] `packages/auth-jwt/` を `jose` ベースで雛形作成（`verifyMisahinaJwt()` を export、JWKS リモート取得 + RS256 検証）
+- [x] `.env.local` は単一 root にまとめ、`apps/{tabikoto,account}/.env.local` から symlink
+- [x] `.gitignore` を monorepo 用に更新（`apps/*/.next/`, `keys/*.pem` 等）
+- [x] `restart.sh` を `npm run build:tabikoto && npm run start:tabikoto` に更新
+- [x] tabikoto を本番ログ (`/var/log/hinavi/server-*.log`) で再起動、`/login` 200 OK
+- [x] next-auth は v5.0.0-beta.31（Next 16 対応版）を採用
+
+#### Phase 3: apps/account 実装 [完了 2026-06-26 — OAuth/SES 認証情報の投入待ち]
+- [x] Auth.js v5 セットアップ（`apps/account/src/auth.ts`）
+- [x] MySQL adapter（自前。`apps/account/src/lib/adapter-mysql.ts`）
+- [x] Google / Apple / Nodemailer(SES) の3プロバイダ設定
+- [x] `jwt.encode/decode` を上書きして cookie の中身を **RS256 で署名した JWT** にする（Auth.js デフォルトの JWE/HS256 を捨てた）
+- [x] `apps/account/src/lib/jwt-keys.ts` で PEM 鍵を読込み、`jose` の `importPKCS8/importSPKI` で署名鍵化、`exportJWK` で JWKS 化
+- [x] cookie 名 `__Secure-misahina.session`, Domain `.hinavi.mediowl.ai` を `cookies.sessionToken` 設定で固定
+- [x] `/login/page.tsx` UI（Google / Apple / Magic Link 3経路、`?return=` でホワイトリスト検証）
+- [x] `/login/verify-request` / `/login/error` の補助ページ
+- [x] `/api/jwks.json` + `/.well-known/jwks.json` (rewrite 経由) で公開鍵配布
+- [x] `/logout?return=...` カスタムエンドポイント（Auth.js `signOut(redirect:false)` + 302）
+- [x] Apple client_secret JWT を ES256 で起動時生成し 5ヶ月キャッシュ（`apps/account/src/lib/apple-secret.ts`）
+- [x] Magic Link メールは Amazon SES v2 SDK 直接送信（`apps/account/src/lib/email-ses.ts`）
+- [x] `.env.local` に Auth.js / JWT / SES の placeholder を追加（`AUTH_SECRET` は自動生成済）
+- [x] **重要**: `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` は **絶対パス**で指定（npm workspaces の cwd が `apps/account/` になるため）
+- [x] 起動テスト: `/api/jwks.json` が RS256 公開鍵を返し、`/login` 200, `/logout` 307 を確認
+
+#### Phase 4: apps/tabikoto 移行 [完了 2026-06-26]
+- [x] `src/lib/session.ts` を JWT 検証ベースに刷新（`getSession()` は `SessionUser | null` を返す。iron-session 撤去）
+- [x] `src/proxy.ts` を `@hinavi/auth-jwt` の `verifyMisahinaJwt()` 利用に切替。未ログイン時は `account.hinavi.mediowl.ai/login?return=<encoded>` へ 307
+- [x] `src/app/login/` と `src/app/api/auth/login/` を `git rm`
+- [x] `src/app/api/auth/logout/route.ts` を `account.hinavi.mediowl.ai/logout?return=/` への 302 リダイレクタに刷新
+- [x] `src/app/api/{generate,places/nearby,tts}/route.ts` を新 `getSession()` API に対応（`session.userId: number` → `session.id: string`）
+- [x] プロンプト置換の `display_name` → `name` 切替
+- [x] `conversations.user_id` / `osm_places_compare.user_id` への INSERT を UUID 文字列で実行
+- [x] `SettingsOverlay` のログアウトを `window.location.href = '/api/auth/logout'`（→ account へ転送）に変更
+- [x] `apps/tabikoto/scripts/create-user.mjs` を `git rm`
+- [x] `bcryptjs` / `iron-session` / `@types/bcryptjs` を `package.json` から削除
+- [x] `.env.local` から `SESSION_PASSWORD` / `SESSION_COOKIE_NAME` を削除し、`ACCOUNT_BASE_URL` / `JWKS_URL` / `JWT_AUDIENCE_TABIKOTO` を追加
+- [x] **JWKS 取得は dev では `http://localhost:6501/.well-known/jwks.json` を利用**（同 EC2 内なので ALB 経由不要）。prod で別サーバになったらフル URL に差し替え
+- [x] 起動テスト: 未認証で `/` 叩くと `https://account.hinavi.mediowl.ai/login?return=...` に 307 リダイレクトされることを確認
+
+#### Phase 5: スキーマ移行
+- [ ] `sql/schema.sql` の users を Auth.js 標準に置き換え（`id TEXT PK`, `email`, `name`, `image`, `email_verified` 等）
+- [ ] `accounts` / `verification_tokens` 追加
+- [ ] `conversations.user_id` の型変更（INT → TEXT）
+
+#### Phase 6: 仕様書 & systemd
+- [ ] `docs/auth-integration.md`（freetalk 開発者向け）
+- [ ] `deploy/systemd/hinavi-{account,tabikoto}.service` 雛形
+
+#### Phase 7: 本番化（後日、本番サーバ構築後）
+- [ ] 本番 RS256 鍵生成
+- [ ] `.env` 本番値設定
+- [ ] systemd 起動、ALB ルール、DNS 切替
+- [ ] 旧 `hinavi.mediowl.ai` から `tabikoto.misahina.com` への 301 / または開発環境用に保持
+
+### 13.8 リスクと方針
+
+- **既存 PWA インストール済端末**: cookie 名 (`hinavi_session` → `__Secure-misahina.session`) と URL (`hinavi.mediowl.ai` → `tabikoto.hinavi.mediowl.ai`) が変わるため、**全端末でログアウト状態**になる。新規ログイン誘導はやむなし（テスト用のみのため許容）。
+- **ホーム画面アイコン**: PWA scope が変わるため、既存インストール端末は一度削除→再インストール推奨。
+- **freetalk 側の Apple Sign In 設定**: 別開発者の Service ID にもこのプロジェクトと同じ Team ID / Key を共有する必要あり。Apple Developer 上で freetalk 用の追加 Service ID を発行する形が綺麗（同一 App ID 配下の異なる Service ID で別 Return URL を許容）。
+- **Magic Link のリンク有効期限**: Auth.js デフォルト 24h を **15 分に短縮**（フィッシング耐性）。
+- **CSRF**: cookie `SameSite=Lax` + Auth.js の標準 CSRF 対策で十分。`return` パラメータは厳格にホワイトリスト検証する。
 

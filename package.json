@@ -1,33 +1,19 @@
 {
-  "name": "hinavi",
+  "name": "hinavi-monorepo",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "next dev -p 6500",
-    "build": "next build",
-    "start": "next start -p 6500",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "@types/leaflet": "^1.9.12",
-    "bcryptjs": "^2.4.3",
-    "iron-session": "^8.0.4",
-    "leaflet": "^1.9.4",
-    "mysql2": "^3.22.0",
-    "next": "16.2.3",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/bcryptjs": "^2.4.6",
-    "@types/google.maps": "^3.58.1",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.3",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "dev:tabikoto": "npm run -w apps/tabikoto dev",
+    "dev:account": "npm run -w apps/account dev",
+    "build": "npm run -w apps/tabikoto build && npm run -w apps/account build",
+    "build:tabikoto": "npm run -w apps/tabikoto build",
+    "build:account": "npm run -w apps/account build",
+    "start:tabikoto": "npm run -w apps/tabikoto start",
+    "start:account": "npm run -w apps/account start",
+    "lint": "npm run -ws --if-present lint"
   }
 }
