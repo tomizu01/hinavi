@@ -9,6 +9,9 @@ const ACCOUNT_BASE = process.env.ACCOUNT_BASE_URL ?? 'https://account.hinavi.med
 
 const PUBLIC_PATHS = ['/manifest.webmanifest', '/sw.js', '/icon-512.png'];
 
+// Stripe Webhook など認証不要のサーバー間通信エンドポイント
+const PUBLIC_API_PREFIXES = ['/api/webhooks/'];
+
 function redirectToLogin(req: NextRequest) {
   return NextResponse.redirect(`${ACCOUNT_BASE}/login?return=${encodeURIComponent(req.url)}`);
 }
@@ -17,6 +20,7 @@ export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (
     PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/')) ||
+    PUBLIC_API_PREFIXES.some((p) => pathname.startsWith(p)) ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/characters/') ||
     pathname.startsWith('/audio/') ||

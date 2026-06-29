@@ -2,6 +2,7 @@ import type { CharacterId } from '@/lib/characters';
 import type { ConversationLine, ConversationMode, GenerateResponse, Spot } from '@/lib/types';
 import { haversineMeters, type GeoPoint } from './geo';
 import { fetchSpeechAudio, fetchWithTimeout, loadAudio, playSpeechAudio, stopSpeech } from './tts';
+import { InsufficientPointsError } from './points';
 
 const REFETCH_DISTANCE_M = 1500;
 const HISTORY_MAX = 5;
@@ -24,6 +25,8 @@ export interface LoopCallbacks {
   onSpeakEnd: (speaker: CharacterId, fullText: string, spot: Spot | null) => void;
   onSpotChange: (spot: Spot) => void;
   onOfflineNotice: () => Promise<void>;
+  onInsufficientPoints?: () => void;
+  onPointsConsumed?: () => void;
 }
 
 interface FetchResult {
@@ -72,6 +75,10 @@ async function generatePair(body: GenerateBody): Promise<GenerateResponse> {
     },
     GENERATE_TIMEOUT_MS,
   );
+  if (res.status === 402) {
+    const data = (await res.json().catch(() => ({}))) as { required?: number };
+    throw new InsufficientPointsError(data.required ?? 10);
+  }
   if (!res.ok) throw new Error(`generate ${res.status}`);
   const data = (await res.json()) as GenerateResponse;
   if (typeof data.misaki !== 'string' || typeof data.hinata !== 'string') {
@@ -265,10 +272,22 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
         });
         netFails = 0;
       } catch (err) {
+        if (err instanceof InsufficientPointsError) {
+          cb.onInsufficientPoints?.();
+          // 残高が回復するまで一時停止扱いで待機 (UIが購入導線を表示)
+          while (!abortSignal.aborted) {
+            await wait(5000, abortSignal);
+            // 次ループに進ませて再度残高チェックさせる
+            break;
+          }
+          turnNo = nextTurnNo - 1; // 同じターン番号を再度試行
+          continue;
+        }
         console.error('generate failed:', err);
         netFails += 1;
         continue;
       }
+      cb.onPointsConsumed?.();
 
       let bailToOffline = false;
       const lines: Array<{ speaker: CharacterId; text: string }> = [

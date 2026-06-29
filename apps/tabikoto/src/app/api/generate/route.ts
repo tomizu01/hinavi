@@ -5,6 +5,8 @@ import { CHARACTERS } from '@/lib/characters';
 import { loadCharacterPrompt, loadKaiwaPrompt } from '@/lib/prompts';
 import { pool } from '@/lib/db';
 import { formatDistance } from '@/lib/distance';
+import { consumePoints, grantOnceIfAbsent, hasEnoughBalance } from '@/lib/billing/points';
+import { INITIAL_TRIAL_POINTS, POINTS_PER_GENERATE } from '@/lib/billing/config';
 import type { ConversationLine, ConversationMode, GenerateRequest, Spot } from '@/lib/types';
 
 const DEFAULT_USER_NAME = 'あなた';
@@ -202,6 +204,34 @@ export async function POST(req: Request) {
   }
   const req2 = body as GenerateRequest & { history: ConversationLine[] };
 
+  // 初回お試し付与 (1ユーザー1回限り)
+  if (INITIAL_TRIAL_POINTS > 0) {
+    try {
+      await grantOnceIfAbsent({
+        userId: session.id,
+        grantType: 'initial_trial',
+        source: 'initial_trial',
+        points: INITIAL_TRIAL_POINTS,
+      });
+    } catch (err) {
+      console.error('initial trial grant failed:', err);
+    }
+  }
+
+  // 残高チェック (楽観方式: 生成成功後に消費)
+  try {
+    const ok = await hasEnoughBalance(session.id, POINTS_PER_GENERATE);
+    if (!ok) {
+      return NextResponse.json(
+        { error: 'insufficient_points', required: POINTS_PER_GENERATE },
+        { status: 402 },
+      );
+    }
+  } catch (err) {
+    console.error('balance check failed:', err);
+    return NextResponse.json({ error: 'balance check failed' }, { status: 500 });
+  }
+
   const [misakiPrompt, hinataPrompt, kaiwaPrompt] = await Promise.all([
     loadCharacterPrompt('misaki'),
     loadCharacterPrompt('hinata'),
@@ -253,6 +283,23 @@ export async function POST(req: Request) {
     ]);
   } catch (err) {
     console.error('conversation insert failed:', err);
+  }
+
+  // 生成成功後に消費 (失敗時は引かない楽観方式)
+  try {
+    const ip =
+      req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+    const ua = req.headers.get('user-agent') ?? null;
+    await consumePoints(session.id, POINTS_PER_GENERATE, {
+      sessionId: req2.sessionId,
+      turnNo: req2.turnNo,
+      mode: req2.mode,
+      ip,
+      userAgent: ua ? ua.slice(0, 255) : null,
+      reason: 'consume_generate',
+    });
+  } catch (err) {
+    console.error('point consume failed:', err);
   }
 
   return NextResponse.json(pair);
