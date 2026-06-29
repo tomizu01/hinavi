@@ -3,7 +3,12 @@ import type Stripe from 'stripe';
 import type { RowDataPacket } from 'mysql2';
 import { pool } from '@/lib/db';
 import { getStripe, getWebhookSecret } from '@/lib/billing/stripe';
-import { PLANS, type PlanKey, type GrantSource } from '@/lib/billing/config';
+import {
+  PLANS,
+  findPlanByPriceId,
+  type PlanKey,
+  type PlanDefinition,
+} from '@/lib/billing/config';
 import { grantPoints } from '@/lib/billing/points';
 import {
   findActiveSubscriptionByCustomer,
@@ -15,7 +20,7 @@ export const runtime = 'nodejs';
 
 function planFromMetadata(meta: Stripe.Metadata | null): PlanKey | null {
   const p = meta?.plan;
-  if (p === 'chokotto' || p === 'light') return p;
+  if (p && (p in PLANS)) return p as PlanKey;
   return null;
 }
 
@@ -34,17 +39,22 @@ async function isLotAlreadyGranted(stripeRef: string): Promise<boolean> {
 
 async function grantForPlan(opts: {
   userId: string;
-  planKey: PlanKey;
+  plan: PlanDefinition;
   stripeRef: string;
 }): Promise<void> {
   if (await isLotAlreadyGranted(opts.stripeRef)) return;
-  const plan = PLANS[opts.planKey];
-  const source: GrantSource =
-    opts.planKey === 'chokotto' ? 'plan_chokotto' : 'plan_light';
+  if (opts.plan.points <= 0) {
+    console.warn(
+      'grantForPlan: plan has 0 points, skipping',
+      opts.plan.key,
+      opts.stripeRef,
+    );
+    return;
+  }
   await grantPoints({
     userId: opts.userId,
-    source,
-    points: plan.points,
+    source: opts.plan.grantSource,
+    points: opts.plan.points,
     stripeRef: opts.stripeRef,
   });
 }
@@ -61,11 +71,11 @@ async function handleCheckoutCompleted(
   }
 
   if (s.mode === 'payment') {
-    // ちょこっとプラン (都度課金) は即時付与
+    // 都度課金プランは即時付与
     const ref = typeof s.payment_intent === 'string'
       ? s.payment_intent
       : s.payment_intent?.id ?? s.id;
-    await grantForPlan({ userId, planKey, stripeRef: ref });
+    await grantForPlan({ userId, plan: PLANS[planKey], stripeRef: ref });
     return;
   }
 
@@ -102,6 +112,38 @@ function extractSubscriptionIdFromInvoice(invoice: Stripe.Invoice): string | nul
   if (lineRef && typeof lineRef === 'object' && 'id' in lineRef) return lineRef.id;
 
   return null;
+}
+
+function priceIdOfLine(line: unknown): string | null {
+  const l = line as {
+    pricing?: { price_details?: { price?: string } };
+    price?: { id?: string } | string | null;
+  };
+  if (l.pricing?.price_details?.price) return l.pricing.price_details.price;
+  if (typeof l.price === 'string') return l.price;
+  if (l.price && typeof l.price === 'object' && 'id' in l.price) {
+    return l.price.id ?? null;
+  }
+  return null;
+}
+
+// 請求書から正のチャージ (実際に課金される額) を持つ line item の price_id を抽出。
+// アップグレード時はクレジット (負) + 新プラン課金 (正) の複数ラインが入るため、
+// 単純に line[0] を見ると古いプランを拾ってしまうので、最大金額のものを選ぶ。
+function extractPriceIdFromInvoice(invoice: Stripe.Invoice): string | null {
+  const lines = invoice.lines?.data ?? [];
+  if (lines.length === 0) return null;
+
+  let best: { amount: number; priceId: string } | null = null;
+  for (const line of lines) {
+    const amount = (line as unknown as { amount?: number }).amount ?? 0;
+    const priceId = priceIdOfLine(line);
+    if (!priceId) continue;
+    if (!best || amount > best.amount) {
+      best = { amount, priceId };
+    }
+  }
+  return best?.priceId ?? null;
 }
 
 async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
@@ -146,9 +188,21 @@ async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
     return;
   }
 
+  // 請求書の line item の price_id から該当プランを逆引き (アップ/ダウングレード対応)
+  const priceId = extractPriceIdFromInvoice(invoice);
+  const plan = priceId ? findPlanByPriceId(priceId) : null;
+  if (!plan) {
+    console.warn(
+      'invoice.paid: plan not found for price_id=%s (invoice=%s)',
+      priceId,
+      invoice.id,
+    );
+    return;
+  }
+
   // 同じ invoice から二重付与しないよう stripe_ref で重複排除
   const ref = invoice.id ?? `invoice_${Date.now()}`;
-  await grantForPlan({ userId, planKey: 'light', stripeRef: ref });
+  await grantForPlan({ userId, plan, stripeRef: ref });
 }
 
 async function handleSubscriptionUpdated(

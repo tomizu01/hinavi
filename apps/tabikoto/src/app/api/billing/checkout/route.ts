@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
 import { getStripe } from '@/lib/billing/stripe';
-import { PLANS, type PlanKey } from '@/lib/billing/config';
+import { PLANS, isSubscriptionPlan, type PlanKey } from '@/lib/billing/config';
+import { findActiveSubscriptionByUser } from '@/lib/billing/subscriptions';
 
 export const runtime = 'nodejs';
 
@@ -24,12 +25,32 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid_plan' }, { status: 400 });
   }
   const plan = PLANS[planKey];
+  if (!plan.visible) {
+    return NextResponse.json({ error: 'plan_not_available' }, { status: 400 });
+  }
   const priceId = process.env[plan.stripePriceIdEnv];
   if (!priceId) {
     return NextResponse.json(
       { error: 'price_id_not_configured', env: plan.stripePriceIdEnv },
       { status: 500 },
     );
+  }
+
+  // サブスクの重複契約を防止: 既に有効なサブスクがある場合は Portal へ誘導
+  if (isSubscriptionPlan(plan)) {
+    const active = await findActiveSubscriptionByUser(session.id);
+    if (active) {
+      return NextResponse.json(
+        {
+          error: 'already_subscribed',
+          message:
+            '既にサブスクリプションをご契約中です。プラン変更や解約はサブスクリプション管理画面から行ってください。',
+          currentPriceId: active.priceId,
+          cancelPending: active.cancelAt !== null,
+        },
+        { status: 409 },
+      );
+    }
   }
 
   const stripe = getStripe();

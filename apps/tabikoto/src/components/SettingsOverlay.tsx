@@ -7,6 +7,8 @@ export default function SettingsOverlay() {
   const [open, setOpen] = useState(false);
   const [engine, setEngineState] = useState<TtsEngine>('aivis');
   const [loggingOut, setLoggingOut] = useState(false);
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [portalErr, setPortalErr] = useState<string | null>(null);
 
   useEffect(() => {
     setEngineState(getTtsEngine());
@@ -21,6 +23,35 @@ export default function SettingsOverlay() {
     if (loggingOut) return;
     setLoggingOut(true);
     window.location.href = '/api/auth/logout';
+  };
+
+  const handleManageSubscription = async () => {
+    if (portalBusy) return;
+    setPortalBusy(true);
+    setPortalErr(null);
+    try {
+      const res = await fetch('/api/billing/portal', { method: 'POST' });
+      if (res.status === 404) {
+        setPortalErr('現在ライトプランの契約がありません。');
+        setPortalBusy(false);
+        return;
+      }
+      if (!res.ok) {
+        setPortalErr('管理画面の起動に失敗しました。少し待ってからお試しください。');
+        setPortalBusy(false);
+        return;
+      }
+      const data = (await res.json()) as { url?: string };
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setPortalErr('管理画面 URL を取得できませんでした。');
+        setPortalBusy(false);
+      }
+    } catch {
+      setPortalErr('管理画面の起動に失敗しました。');
+      setPortalBusy(false);
+    }
   };
 
   return (
@@ -83,7 +114,19 @@ export default function SettingsOverlay() {
               <p className="text-[10px] text-neutral-500">変更は次回の音声生成から反映されます。</p>
             </div>
 
-            <div className="pt-2 border-t border-neutral-800">
+            <div className="pt-2 border-t border-neutral-800 space-y-2">
+              <button
+                onClick={handleManageSubscription}
+                disabled={portalBusy}
+                className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-100 disabled:opacity-50"
+              >
+                {portalBusy ? '起動中…' : 'サブスクリプション管理'}
+              </button>
+              {portalErr && <p className="text-xs text-amber-400">{portalErr}</p>}
+              <p className="text-[10px] text-neutral-500 leading-relaxed">
+                解約 / 支払い方法変更 / 領収書ダウンロードなど
+              </p>
+
               <button
                 onClick={handleLogout}
                 disabled={loggingOut}

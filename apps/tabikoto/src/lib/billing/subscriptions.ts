@@ -65,6 +65,66 @@ export async function findUserIdBySubscription(
   return rows[0]?.user_id ?? null;
 }
 
+// 現在 (cancel pending を含む) 有効なサブスクリプションを 1 件取得
+// 重複契約防止 / UI 状態表示用
+export interface ActiveSubscription {
+  id: number;
+  stripeSubscriptionId: string;
+  stripeCustomerId: string;
+  priceId: string;
+  status: string;
+  currentPeriodEnd: Date | null;
+  cancelAt: Date | null;
+  canceledAt: Date | null;
+}
+
+export async function findActiveSubscriptionByUser(
+  userId: string,
+): Promise<ActiveSubscription | null> {
+  const [rows] = await pool.execute<(SubRow & {
+    stripe_customer_id: string;
+    price_id: string;
+    current_period_end: Date | null;
+    cancel_at: Date | null;
+    canceled_at: Date | null;
+  })[]>(
+    `SELECT id, user_id, stripe_subscription_id, stripe_customer_id, price_id,
+            status, current_period_end, cancel_at, canceled_at
+       FROM subscriptions
+      WHERE user_id = ?
+        AND status IN ('active', 'trialing', 'past_due')
+      ORDER BY id DESC
+      LIMIT 1`,
+    [userId],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: r.id,
+    stripeSubscriptionId: r.stripe_subscription_id,
+    stripeCustomerId: r.stripe_customer_id,
+    priceId: r.price_id,
+    status: r.status,
+    currentPeriodEnd: r.current_period_end,
+    cancelAt: r.cancel_at,
+    canceledAt: r.canceled_at,
+  };
+}
+
+export async function findStripeCustomerIdByUser(
+  userId: string,
+): Promise<string | null> {
+  const [rows] = await pool.execute<(SubRow & { stripe_customer_id: string })[]>(
+    `SELECT stripe_customer_id
+       FROM subscriptions
+      WHERE user_id = ?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [userId],
+  );
+  return rows[0]?.stripe_customer_id ?? null;
+}
+
 export async function findActiveSubscriptionByCustomer(
   customerId: string,
 ): Promise<{ userId: string; subscriptionId: string } | null> {

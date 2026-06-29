@@ -237,6 +237,16 @@ mysql -u ai -p hinavi
 
 ## 11. 直近の作業ログ
 
+### 2026-06-29: 課金・コトポシステム実装 + Stripe サンドボックス動作確認完了
+
+- 4 プラン構成: ちょこっと ¥100 / ライト ¥780/月 / スタンダード ¥2,480/月 / プロ ¥4,980/月
+- Stripe Checkout (初回購入) + Stripe Customer Portal (解約/プラン変更/領収書) のハイブリッド構成 (案A 採用)
+- アップグレード即時+日割り、ダウングレード期間末で適用 (Portal 設定で実現)
+- アクティブサブスク検出 + 重複契約防止 + UI 動的分岐
+- サンドボックスで一通りのフロー動作確認: 初回お試し付与、各プラン購入、解約予約、撤回、アップ/ダウングレード、FIFO 消費すべて正常
+- バグ修正: invoice line items の最大金額抽出 (アップグレード時の credit/charge 混在対策)、Webhook 認証バイパス (proxy.ts)、Stripe API dahlia 構造変更対応
+- 詳細: §14 を参照
+
 ### 2026-06-29: キャラクター名 ひより → ひなた リネーム
 
 `misahina.com`（みさき×ひなた）のドメイン名に実装側を合わせるためのリネーム。当初 2 人目キャラを「ひなた」にする予定がコード上は「ひより」で実走していた齟齬を解消。
@@ -1015,31 +1025,38 @@ cd /var/www/hinavi && npm run -w apps/account start   # port 6501
 - **CSRF**: cookie `SameSite=Lax` + Auth.js の標準 CSRF 対策で十分。`return` パラメータは厳格にホワイトリスト検証する。
 
 
-## 14. 課金・コトポ (ポイント) 導入 [策定 + Phase1 実装完了 2026-06-29]
+## 14. 課金・コトポ (ポイント) 導入 [Phase1+2 実装＋動作確認完了 2026-06-29]
 
 ### 14.1 ビジネス要件
 
 - **時間制限ではなくポイント (コトポ) 制**: 電波状況などで利用できなかった時間の判定が難しいため、AI 会話 1 回生成あたりのポイント消費にする
 - **プラン**:
-  - **ちょこっとプラン**: 100円 (税込) / 2,000 コトポ (想定 約3時間) — 都度購入
+  - **ちょこっとプラン**: 100円 (税込) / 2,000 コトポ (想定 約3時間) — 都度購入 ※「初めての人のお試し」位置付け
   - **ライトプラン**: 月額 780円 (税込) / 10,000 コトポ (想定 約15時間) — サブスク
+  - **スタンダードプラン**: 月額 2,480円 (税込) / 40,000 コトポ (想定 約60時間) — サブスク
+  - **プロプラン**: 月額 4,980円 (税込) / 100,000 コトポ (想定 約150時間) — サブスク
 - **消費レート**: AI 会話 1 往復 (みさき+ひなた) = 10 コトポ。今後実測して調整
 - **有効期限**: 付与日の翌々月末まで (例: 6/29 付与 → 8/31 まで)
 - **消費順**: 付与日が古い順 (FIFO)
 - **初回お試し**: 1 ユーザー 1 回限り、少額付与 (金額は `INITIAL_TRIAL_POINTS` で調整、デフォ 100)
-- **将来**: ちょこっとプラン無料化キャンペーン (1 回限り) / 招待コード (双方付与)
+- **プラン変更**: アップグレード=即時+日割り請求、ダウングレード=期間末で適用
+- **将来**: ちょこっとプラン無料化キャンペーン (1 回限り) / 招待コード (双方付与) / サブスク契約者向けの大盛り追加チャージパック
 
 ### 14.2 設計決定
 
 | 論点 | 決定 |
 |---|---|
-| ライトプランの月次付与タイミング | Stripe 契約日基準。契約月は即時、翌月以降は契約日 (無ければ末日) |
+| サブスク月次付与タイミング | Stripe 契約日基準。契約月は即時、翌月以降は契約日 (無ければ末日) |
 | 初回お試し | 1 ユーザー 1 回限り、少額付与 |
 | 生成失敗時 | 楽観方式: 残高チェック → 生成成功時のみ FIFO 消費。失敗時は引かない |
 | 解約後の残ポイント | 有効期限まで使える (再利用促進目的) |
 | 残高ゼロ時 UX | 残 100 未満で警告バナー、残 10 未満で次ターン停止 + 購入モーダル |
 | 決済 | Stripe クレカのみ。Webhook 駆動 |
 | 監査ログ粒度 | 必須 (時刻/user_id/lot_id/amount/session_id/turn_no/mode) + 推奨 (ip/user_agent) |
+| サブスク管理 UI | **Stripe カスタマーポータルに任せる（案A）**: 解約・支払い方法変更・領収書・プラン変更すべて Portal で完結 |
+| プラン変更 | アップグレード=即時+比例配分、ダウングレード=期間末で適用+比例配分なし (Portal 設定で実現) |
+| 重複契約防止 | アクティブなサブスクが存在する場合、サーバ側で 409 を返却。UI は購入ボタンを Portal 誘導に切り替え |
+| 投資なしプラン枠 | `config.ts` の `visible: false` で予約可能。Stripe で商品登録後に Price ID 投入＋ `visible: true` に切替で公開 |
 
 ### 14.3 実装ファイル
 
@@ -1047,50 +1064,110 @@ cd /var/www/hinavi && npm run -w apps/account start   # port 6501
 - `point_lots` — 付与単位の残高 (id, user_id, source, stripe_ref, initial/remaining, granted_at, expires_at, expired)
 - `point_transactions` — 消費・補填の全履歴 (lot_id, amount<0:消費 >0:補填, reason, session_id, turn_no, mode, ip, user_agent)
 - `user_grants` — 1ユーザー1回限り付与の重複防止 (user_id, grant_type) PK
-- `subscriptions` — Stripe Subscription のミラー (stripe_subscription_id UNIQUE, status, period_start/end, cancel_at)
+- `subscriptions` — Stripe Subscription のミラー (stripe_subscription_id UNIQUE, status, period_start/end, cancel_at, canceled_at)
 
 **サーバロジック**:
-- `src/lib/billing/config.ts` — プラン定義 (`PLANS`)・閾値・`calcExpiresAt(date)` (翌々月末を JST で計算)
+- `src/lib/billing/config.ts` — プラン定義 (`PLANS` 4プラン)・閾値・`calcExpiresAt(date)` (翌々月末を JST で計算)・`findPlanByPriceId(priceId)` (Webhook で逆引き)・`visiblePlans()` (UI 表示順)・`isSubscriptionPlan(plan)`
 - `src/lib/billing/points.ts` — `getBalance` / `hasEnoughBalance` / `consumePoints` (FOR UPDATE FIFO) / `grantPoints` / `grantOnceIfAbsent` / `expireLots`
 - `src/lib/billing/stripe.ts` — Stripe SDK lazy 初期化、`apiVersion: 2026-06-24.dahlia`
-- `src/lib/billing/subscriptions.ts` — `upsertSubscriptionFromStripe` / `findUserIdBySubscription`
+- `src/lib/billing/subscriptions.ts` — `upsertSubscriptionFromStripe` / `findUserIdBySubscription` / `findActiveSubscriptionByCustomer` / `findActiveSubscriptionByUser` / `findStripeCustomerIdByUser`
 
 **API**:
 - `POST /api/generate` — 残高チェック → 生成 → FIFO 消費 (生成失敗時は引かない楽観方式)。初回お試し付与もここでトリガー
 - `GET /api/points/balance` — 合計残高 + ロット別有効期限明細を返却。初回お試し付与もここでトリガー
-- `POST /api/billing/checkout` — `{plan: 'chokotto'|'light'}` で Stripe Checkout Session を作成し URL 返却
-- `POST /api/webhooks/stripe` — 署名検証 → `checkout.session.completed` / `invoice.paid` / `customer.subscription.*` を処理。同じ stripe_ref で重複付与しないよう排除
+- `POST /api/billing/checkout` — `{plan: PlanKey}` で Stripe Checkout Session を作成し URL 返却。**サブスクの場合は既存アクティブサブスクを検出して 409 で重複防止**
+- `GET /api/billing/subscription` — 現在のアクティブサブスク情報 (planKey/cancelPending 等) を返却。UI 分岐用
+- `POST /api/billing/portal` — Stripe カスタマーポータルセッションを作成し URL 返却 (解約/プラン変更/領収書取得すべて Portal で完結)
+- `POST /api/webhooks/stripe` — 署名検証 → `checkout.session.completed` / `invoice.paid` / `customer.subscription.*` を処理
+  - **アップグレード対応**: invoice の line items から最大金額のラインの price_id を抽出し `findPlanByPriceId` で逆引き (旧プラン credit と新プラン charge の混在対策)
+  - **冪等性**: 同じ stripe_ref (invoice.id or payment_intent.id) で重複付与しない
+  - **subscription 関連付け**: 新フィールド `invoice.parent.subscription_details.subscription` → customer ID 逆引き → Stripe API 取得の三段フォールバック
+
+**ミドルウェア** (`src/proxy.ts`):
+- Stripe Webhook (`/api/webhooks/*`) は認証バイパス。それ以外は JWT 認証必須
 
 **UI**:
-- `src/components/PointsBadge.tsx` — 残高バッジ (右上)
+- `src/components/PointsBadge.tsx` — 残高バッジ (右上、設定アイコンの左隣)
 - `src/components/LowBalanceBanner.tsx` — 残 100 未満の警告バナー
-- `src/components/PurchaseModal.tsx` — 2 プラン購入導線
+- `src/components/PurchaseModal.tsx` — 4 プラン購入導線。**アクティブサブスク検出して動的表示分岐**
+  - 契約中プラン: 「ご契約中」バッジ + 緑枠 → クリックで Portal 起動
+  - 他のサブスクプラン: 「プラン変更は管理画面から」 → 同じく Portal 起動
+  - ちょこっと (one_time): 常時購入可能
+- `src/components/SettingsOverlay.tsx` — 「サブスクリプション管理」ボタン追加 → `/api/billing/portal` 経由で Portal 起動
 - `src/app/page.tsx` — 残高ポーリング (30 秒) + バッジ + バナー + 枯渇時自動モーダル
 - `src/app/billing/success/page.tsx` / `cancel/page.tsx` — Stripe Checkout のリダイレクト先
+
+**クライアントヘルパ** (`src/lib/client/points.ts`):
+- `fetchBalance()` / `startCheckout(plan)` (409 ハンドリング含む) / `fetchActiveSubscription()` / `openCustomerPortal()` / `InsufficientPointsError`
+
+**会話ループ** (`src/lib/client/conversationLoop.ts`):
+- 402 (insufficient_points) を `InsufficientPointsError` で捕捉 → `onInsufficientPoints` コールバックで UI 通知
+- `onPointsConsumed` コールバックで成功時に残高再フェッチ
 
 **バッチ**:
 - `apps/tabikoto/scripts/expire-lots.mjs` — `point_lots.expired=1` を日次バッチで更新 (cron 設定例コメントあり)
 
-### 14.4 残作業 (本番化前)
+### 14.4 サンドボックスでの動作確認結果 [2026-06-29]
 
-- [ ] **Stripe ダッシュボード設定**:
-  - Product 2 つ作成 (ちょこっとプラン: ¥100 one_time / ライトプラン: ¥780/月 recurring)
-  - Webhook endpoint 作成 → `STRIPE_WEBHOOK_SECRET` を取得
-  - `STRIPE_SECRET_KEY` / `STRIPE_PRICE_ID_CHOKOTTO` / `STRIPE_PRICE_ID_LIGHT` を `.env.local` に設定
-- [ ] **DB マイグレーション適用**: `mysql -u ai -p hinavi < sql/migrations/20260629_add_billing_tables.sql`
-- [ ] **cron 設定**: `0 19 * * * set -a; . .env.local; set +a; node scripts/expire-lots.mjs >> /var/log/hinavi/expire-lots.log 2>&1`
-- [ ] **税表記**: 特商法表記ページ (法律上必須)
-- [ ] **規約**: コトポの有効期限、解約時の扱い、返金不可などを明記
-- [ ] **実測してレート調整**: 10 コトポ/往復 は仮置き、運用後に再検討
-- [ ] **招待コード** (将来): `invite_codes` テーブル設計、コード発行 UI、コード利用時の双方付与
+| シナリオ | 結果 |
+|---|---|
+| 初回お試し付与 (1ユーザー1回限り、100コトポ) | ✅ 正常 |
+| ちょこっとプラン購入 (Stripe Checkout 都度課金) | ✅ 正常、2,000 付与 |
+| ライトプラン購入 (Stripe Checkout サブスク初回) | ✅ 正常、10,000 付与 |
+| FIFO 消費 (initial_trial → chokotto → light の順) | ✅ 正常 |
+| ライトプラン解約予約 (Portal) | ✅ subscriptions.cancel_at に日時保存 |
+| 解約予約の撤回 (Portal の「サブスクリプションをキャンセルしない」) | ✅ 正常 |
+| ライト → スタンダードアップグレード (Portal、日割り即時請求) | ✅ 修正後正常 (初回は invoice の line[0] 取得バグで Light 付与のみ → 最大金額ライン抽出に修正) |
+| スタンダード → プロアップグレード | ✅ 100,000 正常付与 |
+| 重複サブスク防止 (アクティブ中のサブスク Checkout) | ✅ 409 で防止、UI は Portal 誘導 |
 
-### 14.5 環境変数 (`.env.local`)
+### 14.5 残作業 (本番化前)
+
+**Stripe サンドボックス設定 (完了)**:
+- [x] Product 4 つ作成（ちょこっと/ライト/スタンダード/プロ）
+- [x] Stripe CLI で Webhook 転送設定
+- [x] `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID_*` (4種) を `.env.local` に設定
+- [x] DB マイグレーション適用
+- [x] カスタマーポータル設定（プラン切替・解約・支払い方法変更・領収書 すべて有効化）
+  - 日割り計算: ON
+  - 請求タイミング: 更新時点で直ちに日割り請求
+  - ダウングレード: 請求期間の終了時まで待ってから更新
+
+**本番化時に必要な対応**:
+- [ ] Stripe 本番アカウント有効化（事業者情報・銀行口座・本人確認）
+- [ ] 本番モードで Product/Price 4 つ再作成 → live モードの `STRIPE_PRICE_ID_*` を本番 `.env` に
+- [ ] 本番 Webhook endpoint 登録（`https://tabikoto.hinavi.mediowl.ai/api/webhooks/stripe`） → live モードの `whsec_...`
+- [ ] 本番モードでも同じ Portal 設定（テスト/本番モードはデータ分離）
+- [ ] cron 設定: `0 19 * * * set -a; . .env.local; set +a; node scripts/expire-lots.mjs >> /var/log/hinavi/expire-lots.log 2>&1`
+- [ ] 特商法表記ページ（法律上必須）
+- [ ] 利用規約 — コトポの有効期限、解約時の扱い、返金不可などを明記
+- [ ] ALB の WebSocket 通過設定 (Next.js HMR 用、開発時のみ気になる、本番影響なし)
+
+**運用後の検討事項**:
+- [ ] 実測してレート調整 — 10 コトポ/往復 は仮置き、テスト走らせて再検討
+- [ ] サブスク契約者向け追加チャージパック — ちょこっと (お試し用) とは別に、`topup_small/medium/large` 等を追加。Stripe で商品登録 → `PLANS` に追加 → サブスク契約中は対象を出し分け
+- [ ] **ちょこっとプランの位置付け整理** — 「初めての人のお試し」用なので、サブスク契約中ユーザーへは非表示 or 「お試し」明示にする UX 検討
+- [ ] 招待コード — `invite_codes` テーブル設計、コード発行 UI、コード利用時の双方付与
+- [ ] ちょこっと無料化キャンペーン — `campaign_chokotto_free` 付与 (1ユーザー1回限り) の発動条件設計
+
+### 14.6 環境変数 (`.env.local`)
 
 ```
-STRIPE_SECRET_KEY=sk_live_...        # or sk_test_... in dev
+STRIPE_SECRET_KEY=sk_live_...        # or sk_test_... in dev (sandbox)
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_PRICE_ID_CHOKOTTO=price_...   # ちょこっとプラン (one_time)
 STRIPE_PRICE_ID_LIGHT=price_...      # ライトプラン (recurring monthly)
+STRIPE_PRICE_ID_STANDARD=price_...   # スタンダードプラン (recurring monthly)
+STRIPE_PRICE_ID_PRO=price_...        # プロプラン (recurring monthly)
 TABIKOTO_PUBLIC_URL=https://tabikoto.hinavi.mediowl.ai
 INITIAL_TRIAL_POINTS=100             # 0 で無効
 ```
+
+### 14.7 つまづきポイント (今後の参考)
+
+- **Next.js dev サーバの allowedDevOrigins**: 開発機を `tabikoto.hinavi.mediowl.ai` ドメイン経由で叩くと cross-origin として弾かれる → `next.config.ts` の `allowedDevOrigins: ['tabikoto.hinavi.mediowl.ai']` で許可
+- **proxy.ts (Next 16 middleware) が Webhook を弾く**: 全リクエストが認証必須ミドルウェアを通るため、Stripe Webhook が 307 redirect される → `/api/webhooks/` を public パスに追加
+- **Stripe CLI の WebSocket 切断**: 長時間アイドルで `websocket: close sent` ログとともに切断、その間 Webhook はローカルに届かない → 再起動 + `stripe events resend <evt_id>` で復旧。本番は直接 Webhook endpoint なので無関係
+- **新 Stripe API (2026-06-24.dahlia) の Invoice 構造変更**: `invoice.subscription` が廃止、`invoice.parent.subscription_details.subscription` に移動。三段フォールバック (parent 経由 → customer ID 逆引き → Stripe API 取得) で対応
+- **アップグレード時の invoice line items**: 旧プラン credit (負額) と新プラン charge (正額) の複数ライン構造になる。line[0] を見ると古いプランを拾うバグ。**最大金額のラインを選ぶ**ロジックで解決
+- **Stripe サンドボックスの戻るリンク**: Portal の左上戻るボタンが「サンドボックスに戻る」表記で紛らわしいが、`return_url` に正しく飛ぶ。本番モードではビジネス名が表示される
