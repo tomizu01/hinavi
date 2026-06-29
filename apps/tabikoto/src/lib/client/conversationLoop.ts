@@ -74,7 +74,7 @@ async function generatePair(body: GenerateBody): Promise<GenerateResponse> {
   );
   if (!res.ok) throw new Error(`generate ${res.status}`);
   const data = (await res.json()) as GenerateResponse;
-  if (typeof data.misaki !== 'string' || typeof data.hiyori !== 'string') {
+  if (typeof data.misaki !== 'string' || typeof data.hinata !== 'string') {
     throw new Error('generate: malformed response');
   }
   return data;
@@ -273,7 +273,7 @@ export function startConversationLoop(cb: LoopCallbacks): LoopController {
       let bailToOffline = false;
       const lines: Array<{ speaker: CharacterId; text: string }> = [
         { speaker: 'misaki', text: pair.misaki },
-        { speaker: 'hiyori', text: pair.hiyori },
+        { speaker: 'hinata', text: pair.hinata },
       ];
 
       for (const { speaker, text } of lines) {

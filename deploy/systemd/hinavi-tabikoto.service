@@ -1,0 +1,24 @@
+[Unit]
+Description=hinavi tabikoto (Next.js app, port 6500)
+Documentation=https://github.com/anthropics/hinavi /var/www/hinavi/STATUS.md
+After=network.target mysqld.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/var/www/hinavi
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm run start:tabikoto
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/hinavi/tabikoto.log
+StandardError=append:/var/log/hinavi/tabikoto.log
+# next start の SIGTERM 待ち時間 + バッファ
+TimeoutStopSec=30
+# OOM 時にプロセスマネージャに止められないよう優先度を上げる
+OOMScoreAdjust=-100
+
+[Install]
+WantedBy=multi-user.target

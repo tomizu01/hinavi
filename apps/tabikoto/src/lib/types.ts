@@ -30,5 +30,5 @@ export interface GenerateRequest {
 
 export interface GenerateResponse {
   misaki: string;
-  hiyori: string;
+  hinata: string;
 }

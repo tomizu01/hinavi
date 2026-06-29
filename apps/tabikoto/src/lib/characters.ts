@@ -1,4 +1,4 @@
-export type CharacterId = 'misaki' | 'hiyori';
+export type CharacterId = 'misaki' | 'hinata';
 
 export interface Character {
   id: CharacterId;
@@ -18,14 +18,14 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     elevenLabsVoiceId: 'ugYcuAusTuWCSOpJD0Xd',
     promptPath: 'prompts/characters/misaki.md',
   },
-  hiyori: {
-    id: 'hiyori',
-    displayName: 'ひより',
-    imagePath: '/characters/hiyori.png',
+  hinata: {
+    id: 'hinata',
+    displayName: 'ひなた',
+    imagePath: '/characters/hinata.png',
     aivisModelUuid: 'a670e6b8-0852-45b2-8704-1bc9862f2fe6',
     elevenLabsVoiceId: 'OSwaPSNdfituxkWcjlkR',
-    promptPath: 'prompts/characters/hiyori.md',
+    promptPath: 'prompts/characters/hinata.md',
   },
 };
 
-export const TURN_ORDER: CharacterId[] = ['misaki', 'hiyori'];
+export const TURN_ORDER: CharacterId[] = ['misaki', 'hinata'];

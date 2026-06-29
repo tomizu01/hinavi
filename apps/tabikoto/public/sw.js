@@ -6,7 +6,7 @@ const CACHE_NAME = 'hinavi-v8';
 const PRECACHE_URLS = [
   '/icon-512.png',
   '/characters/misaki.png',
-  '/characters/hiyori.png',
+  '/characters/hinata.png',
   '/audio/offline_notice.wav',
 ];
 

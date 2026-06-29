@@ -1,0 +1,22 @@
+[Unit]
+Description=hinavi account (Auth.js v5, port 6501)
+Documentation=https://github.com/anthropics/hinavi /var/www/hinavi/STATUS.md
+After=network.target mysqld.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/var/www/hinavi
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm run start:account
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/hinavi/account.log
+StandardError=append:/var/log/hinavi/account.log
+TimeoutStopSec=30
+OOMScoreAdjust=-100
+
+[Install]
+WantedBy=multi-user.target

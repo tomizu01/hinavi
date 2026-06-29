@@ -15,7 +15,7 @@ import { stopSpeech } from '@/lib/client/tts';
 
 interface SpeechState {
   misaki: string;
-  hiyori: string;
+  hinata: string;
 }
 
 export default function MainPage() {
@@ -23,7 +23,7 @@ export default function MainPage() {
   const [paused, setPaused] = useState(false);
   const [online, setOnline] = useState(true);
   const [position, setPosition] = useState<GeoPoint | null>(null);
-  const [speech, setSpeech] = useState<SpeechState>({ misaki: '', hiyori: '' });
+  const [speech, setSpeech] = useState<SpeechState>({ misaki: '', hinata: '' });
   const [, setCurrentSpot] = useState<Spot | null>(null);
 
   const positionRef = useRef<GeoPoint | null>(null);
@@ -62,7 +62,7 @@ export default function MainPage() {
   const onSpeakEnd = useCallback(() => {}, []);
   const onSpotChange = useCallback((spot: Spot) => { setCurrentSpot(spot); }, []);
   const onOfflineNotice = useCallback(async () => {
-    setSpeech({ misaki: 'ここは圏外のようです。電波が戻るまで少し待ちますね。', hiyori: '' });
+    setSpeech({ misaki: 'ここは圏外のようです。電波が戻るまで少し待ちますね。', hinata: '' });
   }, []);
 
   const handleStart = useCallback(async () => {
@@ -150,7 +150,7 @@ export default function MainPage() {
       </div>
       <div className="shrink-0 flex flex-col gap-2 py-2">
         <SpeechRow speaker="misaki" text={speech.misaki} side="right" />
-        <SpeechRow speaker="hiyori" text={speech.hiyori} side="left" />
+        <SpeechRow speaker="hinata" text={speech.hinata} side="left" />
       </div>
     </main>
   );

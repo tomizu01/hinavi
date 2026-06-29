@@ -66,7 +66,7 @@ CREATE TABLE verification_tokens (
 -- 旅コト本体のテーブル
 -- ============================================================
 
--- conversations: みさき/ひより 1発話 = 1行
+-- conversations: みさき/ひなた 1発話 = 1行
 CREATE TABLE conversations (
   id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id      VARCHAR(36) NOT NULL,
