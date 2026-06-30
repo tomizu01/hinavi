@@ -6,14 +6,10 @@ import { applyTtsReadings } from '@/lib/tts-readings';
 export const runtime = 'nodejs';
 
 const AIVIS_SYNTHESIZE_URL = 'https://api.aivis-project.com/v1/tts/synthesize';
-const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1/text-to-speech';
-
-type TtsEngine = 'aivis' | 'elevenlabs';
 
 interface ReqBody {
   text?: string;
   character?: CharacterId;
-  engine?: TtsEngine;
 }
 
 export async function POST(req: Request) {
@@ -27,13 +23,9 @@ export async function POST(req: Request) {
   if (!body.character || !(body.character in CHARACTERS)) {
     return NextResponse.json({ error: 'invalid character' }, { status: 400 });
   }
-  const engine: TtsEngine = body.engine === 'elevenlabs' ? 'elevenlabs' : 'aivis';
   const character = CHARACTERS[body.character];
   const spokenText = applyTtsReadings(body.text);
 
-  if (engine === 'elevenlabs') {
-    return synthesizeElevenLabs(spokenText, character.elevenLabsVoiceId);
-  }
   return synthesizeAivis(spokenText, character.aivisModelUuid);
 }
 
@@ -72,52 +64,6 @@ async function synthesizeAivis(text: string, modelUuid: string) {
     });
   } catch (err) {
     console.error('Aivis TTS proxy error:', err);
-    return NextResponse.json({ error: 'tts unavailable' }, { status: 502 });
-  }
-}
-
-async function synthesizeElevenLabs(text: string, voiceId: string) {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: 'elevenlabs key not configured' }, { status: 500 });
-
-  try {
-    const res = await fetch(
-      `${ELEVENLABS_BASE}/${encodeURIComponent(voiceId)}`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text,
-          model_id: 'eleven_v3',
-          language_code: 'ja',
-          output_format: 'mp3_44100_64',
-          voice_settings: {
-            stability: 1.0,
-            similarity_boost: 0.75,
-            style: 0.0,
-            use_speaker_boost: true,
-          },
-        }),
-      },
-    );
-    if (!res.ok) {
-      const detail = await res.text();
-      console.error('ElevenLabs synthesis failed:', res.status, detail);
-      return NextResponse.json({ error: 'elevenlabs failed' }, { status: 502 });
-    }
-    const mp3Buffer = await res.arrayBuffer();
-    return new NextResponse(mp3Buffer, {
-      status: 200,
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Content-Length': String(mp3Buffer.byteLength),
-      },
-    });
-  } catch (err) {
-    console.error('ElevenLabs TTS proxy error:', err);
     return NextResponse.json({ error: 'tts unavailable' }, { status: 502 });
   }
 }

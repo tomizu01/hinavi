@@ -5,7 +5,6 @@ export interface Character {
   displayName: string;
   imagePath: string;
   aivisModelUuid: string;
-  elevenLabsVoiceId: string;
   promptPath: string;
 }
 
@@ -15,7 +14,6 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     displayName: 'みさき',
     imagePath: '/characters/misaki.png',
     aivisModelUuid: 'e9339137-2ae3-4d41-9394-fb757a7e61e6',
-    elevenLabsVoiceId: 'ugYcuAusTuWCSOpJD0Xd',
     promptPath: 'prompts/characters/misaki.md',
   },
   hiyori: {
@@ -23,7 +21,6 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     displayName: 'ひより',
     imagePath: '/characters/hiyori.png',
     aivisModelUuid: 'a670e6b8-0852-45b2-8704-1bc9862f2fe6',
-    elevenLabsVoiceId: 'OSwaPSNdfituxkWcjlkR',
     promptPath: 'prompts/characters/hiyori.md',
   },
 };

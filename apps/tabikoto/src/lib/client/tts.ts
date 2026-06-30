@@ -13,7 +13,6 @@ export function stopSpeech(): void {
 }
 
 import type { CharacterId } from '@/lib/characters';
-import { getTtsEngine } from './settings';
 
 const TTS_TIMEOUT_MS = 20_000;
 
@@ -38,7 +37,7 @@ export async function fetchSpeechAudio(text: string, character: CharacterId): Pr
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, character, engine: getTtsEngine() }),
+      body: JSON.stringify({ text, character }),
     },
     TTS_TIMEOUT_MS,
   );

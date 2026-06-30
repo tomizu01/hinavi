@@ -1,23 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { getTtsEngine, setTtsEngine, type TtsEngine } from '@/lib/client/settings';
+import { useState } from 'react';
 
 export default function SettingsOverlay() {
   const [open, setOpen] = useState(false);
-  const [engine, setEngineState] = useState<TtsEngine>('aivis');
   const [loggingOut, setLoggingOut] = useState(false);
   const [portalBusy, setPortalBusy] = useState(false);
   const [portalErr, setPortalErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    setEngineState(getTtsEngine());
-  }, []);
-
-  const handleEngineChange = (next: TtsEngine) => {
-    setEngineState(next);
-    setTtsEngine(next);
-  };
 
   const handleLogout = () => {
     if (loggingOut) return;
@@ -88,33 +77,6 @@ export default function SettingsOverlay() {
             </div>
 
             <div className="space-y-2">
-              <div className="text-xs text-neutral-400">TTS</div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => handleEngineChange('aivis')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium border ${
-                    engine === 'aivis'
-                      ? 'bg-emerald-600 border-emerald-500 text-white'
-                      : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
-                  }`}
-                >
-                  Aivis
-                </button>
-                <button
-                  onClick={() => handleEngineChange('elevenlabs')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium border ${
-                    engine === 'elevenlabs'
-                      ? 'bg-emerald-600 border-emerald-500 text-white'
-                      : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
-                  }`}
-                >
-                  ElevenLabs
-                </button>
-              </div>
-              <p className="text-[10px] text-neutral-500">変更は次回の音声生成から反映されます。</p>
-            </div>
-
-            <div className="pt-2 border-t border-neutral-800 space-y-2">
               <button
                 onClick={handleManageSubscription}
                 disabled={portalBusy}
