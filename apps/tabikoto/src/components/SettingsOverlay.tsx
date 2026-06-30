@@ -1,12 +1,84 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+
+const NAME_MAX = 8;
 
 export default function SettingsOverlay() {
   const [open, setOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [portalBusy, setPortalBusy] = useState(false);
   const [portalErr, setPortalErr] = useState<string | null>(null);
+
+  const [name, setName] = useState('');
+  const [savedName, setSavedName] = useState('');
+  const [nameLoaded, setNameLoaded] = useState(false);
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameMsg, setNameMsg] = useState<string | null>(null);
+  const [nameErr, setNameErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setNameLoaded(false);
+    setNameMsg(null);
+    setNameErr(null);
+    (async () => {
+      try {
+        const res = await fetch('/api/me/name');
+        if (!res.ok) {
+          if (!cancelled) setNameLoaded(true);
+          return;
+        }
+        const data = (await res.json()) as { name?: string | null };
+        if (cancelled) return;
+        const current = (data.name ?? '').trim();
+        setName(current);
+        setSavedName(current);
+        setNameLoaded(true);
+      } catch {
+        if (!cancelled) setNameLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
+
+  const trimmedName = name.trim();
+  const canSaveName =
+    nameLoaded &&
+    !nameSaving &&
+    trimmedName.length > 0 &&
+    trimmedName.length <= NAME_MAX &&
+    trimmedName !== savedName;
+
+  const handleSaveName = async () => {
+    if (!canSaveName) return;
+    setNameSaving(true);
+    setNameMsg(null);
+    setNameErr(null);
+    try {
+      const res = await fetch('/api/me/name', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmedName }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setNameErr(data.error ?? '保存に失敗しました');
+        setNameSaving(false);
+        return;
+      }
+      const data = (await res.json()) as { name?: string };
+      const saved = (data.name ?? trimmedName).trim();
+      setName(saved);
+      setSavedName(saved);
+      setNameMsg('保存しました');
+      setNameSaving(false);
+    } catch {
+      setNameErr('保存に失敗しました');
+      setNameSaving(false);
+    }
+  };
 
   const handleLogout = () => {
     if (loggingOut) return;
@@ -77,6 +149,38 @@ export default function SettingsOverlay() {
             </div>
 
             <div className="space-y-2">
+              <div className="text-xs text-neutral-400">
+                呼び名
+                <span className="ml-2 text-neutral-500">（最大{NAME_MAX}文字 / ひらがな推奨）</span>
+              </div>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setNameMsg(null);
+                  setNameErr(null);
+                }}
+                maxLength={NAME_MAX}
+                disabled={!nameLoaded || nameSaving}
+                placeholder={nameLoaded ? 'ひらがな で入力' : '読み込み中…'}
+                className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+              />
+              <div className="flex items-center justify-between text-[10px]">
+                <span className="text-neutral-500">{trimmedName.length}/{NAME_MAX} 文字</span>
+                {nameMsg && <span className="text-emerald-400">{nameMsg}</span>}
+                {nameErr && <span className="text-rose-400">{nameErr}</span>}
+              </div>
+              <button
+                onClick={handleSaveName}
+                disabled={!canSaveName}
+                className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-emerald-700 hover:bg-emerald-600 text-white disabled:bg-neutral-800 disabled:text-neutral-500 disabled:cursor-not-allowed"
+              >
+                {nameSaving ? '保存中…' : '呼び名を保存'}
+              </button>
+            </div>
+
+            <div className="pt-2 border-t border-neutral-800 space-y-2">
               <button
                 onClick={handleManageSubscription}
                 disabled={portalBusy}
