@@ -19,7 +19,7 @@ import { fetchBalance } from '@/lib/client/points';
 
 interface SpeechState {
   misaki: string;
-  hinata: string;
+  hiyori: string;
 }
 
 const BALANCE_POLL_MS = 30_000;
@@ -29,7 +29,7 @@ export default function MainPage() {
   const [paused, setPaused] = useState(false);
   const [online, setOnline] = useState(true);
   const [position, setPosition] = useState<GeoPoint | null>(null);
-  const [speech, setSpeech] = useState<SpeechState>({ misaki: '', hinata: '' });
+  const [speech, setSpeech] = useState<SpeechState>({ misaki: '', hiyori: '' });
   const [, setCurrentSpot] = useState<Spot | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [lowThreshold, setLowThreshold] = useState<number>(100);
@@ -88,7 +88,7 @@ export default function MainPage() {
   const onSpeakEnd = useCallback(() => {}, []);
   const onSpotChange = useCallback((spot: Spot) => { setCurrentSpot(spot); }, []);
   const onOfflineNotice = useCallback(async () => {
-    setSpeech({ misaki: 'ここは圏外のようです。電波が戻るまで少し待ちますね。', hinata: '' });
+    setSpeech({ misaki: 'ここは圏外のようです。電波が戻るまで少し待ちますね。', hiyori: '' });
   }, []);
   const onInsufficientPoints = useCallback(() => {
     setPurchaseReason('zero');
@@ -214,7 +214,7 @@ export default function MainPage() {
       </div>
       <div className="shrink-0 flex flex-col gap-2 py-2">
         <SpeechRow speaker="misaki" text={speech.misaki} side="right" />
-        <SpeechRow speaker="hinata" text={speech.hinata} side="left" />
+        <SpeechRow speaker="hiyori" text={speech.hiyori} side="left" />
       </div>
       <PurchaseModal open={purchaseOpen} reason={purchaseReason} onClose={() => setPurchaseOpen(false)} />
     </main>

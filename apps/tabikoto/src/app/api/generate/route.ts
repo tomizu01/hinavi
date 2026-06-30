@@ -23,7 +23,7 @@ interface GeminiResponse {
 
 interface GeneratedPair {
   misaki: string;
-  hinata: string;
+  hiyori: string;
 }
 
 function jstTime(): string {
@@ -38,7 +38,7 @@ function jstTime(): string {
 
 function buildPrompt(
   body: GenerateRequest,
-  characterPrompts: { misaki: string; hinata: string },
+  characterPrompts: { misaki: string; hiyori: string },
   kaiwaPrompt: string,
   userName: string,
   currentTopic: string,
@@ -78,8 +78,8 @@ ${jstTime()}（日本時間）`;
   return `# キャラクター設定: みさき
 ${fillUser(characterPrompts.misaki)}
 
-# キャラクター設定: ひなた
-${fillUser(characterPrompts.hinata)}
+# キャラクター設定: ひより
+${fillUser(characterPrompts.hiyori)}
 
 # 会話シーン指示
 ${fillAll(kaiwaPrompt)}
@@ -89,19 +89,19 @@ ${contextSection}
 ${recentHistory || '（まだ会話は始まっていません）'}
 
 # 出力指示
-上記の設定に従い、みさきとひなたの次の1往復の発話を JSON で出力してください。
+上記の設定に従い、みさきとひよりの次の1往復の発話を JSON で出力してください。
 - 話者名・引用符・説明・ト書きは含めない
 - 各発話は1〜3文、最大100文字以内
-- 出力は { "misaki": "...", "hinata": "..." } の形式のみ`;
+- 出力は { "misaki": "...", "hiyori": "..." } の形式のみ`;
 }
 
 const RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
     misaki: { type: 'string' },
-    hinata: { type: 'string' },
+    hiyori: { type: 'string' },
   },
-  required: ['misaki', 'hinata'],
+  required: ['misaki', 'hiyori'],
 };
 
 async function callGeminiOnce(apiKey: string, prompt: string): Promise<GeneratedPair> {
@@ -128,11 +128,11 @@ async function callGeminiOnce(apiKey: string, prompt: string): Promise<Generated
   const data = (await res.json()) as GeminiResponse;
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('').trim();
   if (!text) throw new Error('gemini empty response');
-  const parsed = JSON.parse(text) as { misaki?: unknown; hinata?: unknown };
-  if (typeof parsed.misaki !== 'string' || typeof parsed.hinata !== 'string') {
+  const parsed = JSON.parse(text) as { misaki?: unknown; hiyori?: unknown };
+  if (typeof parsed.misaki !== 'string' || typeof parsed.hiyori !== 'string') {
     throw new Error('gemini response missing speaker fields');
   }
-  return { misaki: parsed.misaki.trim(), hinata: parsed.hinata.trim() };
+  return { misaki: parsed.misaki.trim(), hiyori: parsed.hiyori.trim() };
 }
 
 async function callGeminiWithRetry(apiKey: string, prompt: string): Promise<GeneratedPair> {
@@ -157,7 +157,7 @@ async function insertConversation(
   sessionId: string,
   turnNo: number,
   mode: ConversationMode,
-  speaker: 'misaki' | 'hinata',
+  speaker: 'misaki' | 'hiyori',
   text: string,
   spot: Spot | undefined,
 ): Promise<void> {
@@ -232,9 +232,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'balance check failed' }, { status: 500 });
   }
 
-  const [misakiPrompt, hinataPrompt, kaiwaPrompt] = await Promise.all([
+  const [misakiPrompt, hiyoriPrompt, kaiwaPrompt] = await Promise.all([
     loadCharacterPrompt('misaki'),
-    loadCharacterPrompt('hinata'),
+    loadCharacterPrompt('hiyori'),
     loadKaiwaPrompt(req2.mode),
   ]);
 
@@ -262,7 +262,7 @@ export async function POST(req: Request) {
 
   const prompt = buildPrompt(
     req2,
-    { misaki: misakiPrompt, hinata: hinataPrompt },
+    { misaki: misakiPrompt, hiyori: hiyoriPrompt },
     kaiwaPrompt,
     userName,
     currentTopic,
@@ -279,7 +279,7 @@ export async function POST(req: Request) {
   try {
     await Promise.all([
       insertConversation(session.id, req2.sessionId, req2.turnNo, req2.mode, 'misaki', pair.misaki, req2.spot),
-      insertConversation(session.id, req2.sessionId, req2.turnNo, req2.mode, 'hinata', pair.hinata, req2.spot),
+      insertConversation(session.id, req2.sessionId, req2.turnNo, req2.mode, 'hiyori', pair.hiyori, req2.spot),
     ]);
   } catch (err) {
     console.error('conversation insert failed:', err);
